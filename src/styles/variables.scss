@@ -1,0 +1,61 @@
+// ==================== 主题变量系统 ====================
+
+:root {
+  // 主色调 - 霓虹紫
+  --primary-color: #a855f7;
+  --primary-light: #c084fc;
+  --primary-dark: #9333ea;
+  
+  // 辅色 - 赛博粉 & 全息蓝
+  --secondary-pink: #ec4899;
+  --secondary-blue: #3b82f6;
+  
+  // 文字颜色
+  --text-primary: #ffffff;
+  --text-secondary: #e2e8f0;
+  --text-muted: #94a3b8;
+  
+  // 背景色
+  //--bg-overlay: rgba(15, 23, 42, 0.6);
+  --bg-dark: #0f172a;
+  --bg-card: rgba(255, 255, 255, 0.1);
+  
+  // 毛玻璃效果参数
+  --glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03));
+  --glass-blur: blur(20px) saturate(150%);
+  --glass-border: 1px solid rgba(255, 255, 255, 0.15);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  
+  // 圆角规范
+  --radius-card: 16px;
+  --radius-button: 8px;
+  --radius-pill: 9999px;
+  
+  // 动画曲线
+  --transition-smooth: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+  --transition-fast: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  
+  // 间距系统
+  --spacing-xs: 0.5rem;
+  --spacing-sm: 1rem;
+  --spacing-md: 1.5rem;
+  --spacing-lg: 2rem;
+  --spacing-xl: 3rem;
+  --spacing-xxl: 4rem;
+  
+  // 断点
+  --breakpoint-mobile: 640px;
+  --breakpoint-tablet: 768px;
+  --breakpoint-desktop: 1024px;
+  --breakpoint-wide: 1280px;
+}
+
+// 亮色主题覆盖
+.light-theme {
+  //--bg-overlay: rgba(255, 255, 255, 0.3);
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.4));
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+}
