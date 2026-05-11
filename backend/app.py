@@ -333,6 +333,12 @@ def serve_tupian_file(filename):
     return safe_send_public_file('tupian', filename)
 
 
+@app.route('/toux/<path:filename>', methods=['GET'])
+def serve_toux_file(filename):
+    """提供头像目录访问（public/toux）"""
+    return safe_send_public_file('toux', filename)
+
+
 @app.route('/api/md-articles', methods=['GET'])
 def get_md_articles():
     """获取 public/wenz 文件夹中的文档列表（md/pdf/xmind/...）"""
@@ -635,7 +641,15 @@ def delete_admin_file(subdir, filename):
         subdir
     )
 
-    safe_filename = secure_filename(filename)
+    # URL 解码文件名，处理中文文件名
+    from urllib.parse import unquote
+    decoded_filename = unquote(filename)
+    safe_filename = secure_filename(decoded_filename)
+
+    # 如果 secure_filename 返回空字符串，使用解码后的文件名
+    if not safe_filename:
+        safe_filename = decoded_filename
+
     filepath = os.path.abspath(os.path.join(base_dir, safe_filename))
 
     if not filepath.startswith(base_dir + os.sep):
