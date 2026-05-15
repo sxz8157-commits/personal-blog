@@ -87,7 +87,7 @@ async function loadBackgroundMedia() {
     } catch (err) {
     console.error('加载背景资源失败，使用默认背景:', err)
     // 修正路径，用 / 开头的根路径
-    bgImages.value = [{ filename: 'img.png', url: '/tupian/img.png' }]
+    bgImages.value = [{ filename: 'img.png', url: '/api/files/toux/img.png' }]
     bgVideos.value = []
   }
 }

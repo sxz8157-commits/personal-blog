@@ -140,41 +140,8 @@ const progressPercent = computed(() => {
   return (currentTime.value / duration.value) * 100;
 });
 
-// 歌曲列表
-// 播放列表，必须和服务器assets文件夹里的文件名100%匹配
-const playlist = ref([
-  {
-    name: 'Thank you for dears.',
-    artist: 'GET IN THE RING',
-    src: buildPublicAssetPath('assets/Thank you for dears. - GET IN THE RING.mp3'),
-    cover: ''
-  },
-  {
-    name: 'Corporate Dreams',
-    artist: 'Capo Productions',
-    src: buildPublicAssetPath('assets/Corporate Dreams - Capo Productions.mp3'),
-    cover: ''
-  },
-  // 后面的歌曲同理，确保文件名完全匹配
-  {
-    name: "Baby, Don't Cry",
-    artist: 'EXO',
-    src: buildPublicAssetPath("assets/Baby, Don't Cry (人鱼的眼泪) - EXO.mp3"),
-    cover: ''
-  },
-  {
-    name: 'History (EXO-K Main Ver.)',
-    artist: 'EXO',
-    src: buildPublicAssetPath('assets/History (EXO-K Main Ver.) - EXO.mp3'),
-    cover: ''
-  },
-  {
-    name: 'The Hanging Tree',
-    artist: 'James Newton Howard / Jennifer Lawrence',
-    src: buildPublicAssetPath('assets/The Hanging Tree - James Newton Howard、Jennifer Lawrence.mp3'),
-    cover: ''
-  }
-]);
+// 播放列表 - 从后端动态获取
+const playlist = ref([]);
 
 async function fetchAudioPlaylist() {
   try {

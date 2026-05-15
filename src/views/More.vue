@@ -118,7 +118,7 @@ let clickTimer = null;
 const showPasswordDialog = ref(false);
 const passwordInput = ref('');
 const passwordInputEl = ref(null);
-const CORRECT_PASSWORD = 'zpx669118';
+const CORRECT_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || '';
 
 // 卡片数据
 const introCards = ref([]);

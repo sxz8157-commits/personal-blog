@@ -16,8 +16,11 @@ export function formatRelativeDate(dateString) {
   if (days === 0) return '今天'
   if (days === 1) return '昨天'
   if (days < 7) return `${days}天前`
+  if (days < 14) return '1周前'
   if (days < 30) return `${Math.floor(days / 7)}周前`
+  if (days < 60) return '1个月前'
   if (days < 365) return `${Math.floor(days / 30)}个月前`
+  if (days < 730) return '1年前'
   return `${Math.floor(days / 365)}年前`
 }
 

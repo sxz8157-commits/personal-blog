@@ -7,8 +7,7 @@ const isDevelopment =
 
 // 创建axios实例
 const request = axios.create({
-  // 同域名部署，baseURL留空即可，会自动请求当前域名的/api
-  baseURL: import.meta.env.VITE_API_BASE_URL || '',
+  baseURL: '',
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json'

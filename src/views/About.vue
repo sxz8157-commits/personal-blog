@@ -12,8 +12,7 @@
           <!-- 个人介绍卡片 -->
           <div class="about-intro glass-card fade-up" style="animation-delay: 0.2s">
             <div class="intro-avatar">
-              <!-- 确保src是 / 开头的根路径，文件名和服务器里的完全一致 -->
-              <img src="/toux/img.png" alt="沛心头像" />
+              <img :src="touxUrl" onerror="this.style.display='none'" alt="沛心头像" />
             </div>
             <div class="intro-text">
               <h2 class="intro-name">{{ aboutData.intro.name }}</h2>
@@ -68,7 +67,12 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import request from '@/utils/request';
+import { useAboutStore } from '@/stores/about';
+
+const aboutStore = useAboutStore();
+
+// 头像 URL - 使用绝对路径，通过代理访问后端
+const touxUrl = new URL('/toux/img.png', window.location.origin).href;
 
 // 关于页面数据
 const aboutData = ref({
@@ -96,11 +100,17 @@ const aboutData = ref({
 
 async function loadAboutData() {
   try {
-    const data = await request.get('/api/about');
+    const data = await aboutStore.loadAboutData();
     console.log('关于页面 API 返回数据:', data);
 
+    // API 返回 null 或空数据时使用默认值
+    if (!data) {
+      console.log('API 返回空数据，使用默认值');
+      return;
+    }
+
     // 处理个人简介
-    if (data.intro && data.intro.length > 0) {
+    if (data.intro && Array.isArray(data.intro) && data.intro.length > 0) {
       const intro = {};
       for (const item of data.intro) {
         intro[item.key] = item.value;
@@ -113,12 +123,12 @@ async function loadAboutData() {
     }
 
     // 处理技能标签
-    if (data.tags && data.tags.length > 0) {
+    if (data.tags && Array.isArray(data.tags) && data.tags.length > 0) {
       aboutData.value.tags = data.tags.map(item => item.value);
     }
 
     // 处理技能树
-    if (data.skills && data.skills.length > 0) {
+    if (data.skills && Array.isArray(data.skills) && data.skills.length > 0) {
       aboutData.value.skills = data.skills.map((item, index) => ({
         name: item.value,
         delay: `${0.1 + index * 0.05}s`
@@ -126,7 +136,7 @@ async function loadAboutData() {
     }
 
     // 处理联系方式
-    if (data.contact && data.contact.length > 0) {
+    if (data.contact && Array.isArray(data.contact) && data.contact.length > 0) {
       const contact = {};
       for (const item of data.contact) {
         contact[item.key] = item.value;

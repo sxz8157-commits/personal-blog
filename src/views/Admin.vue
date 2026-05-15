@@ -481,8 +481,9 @@ async function uploadFiles(files) {
 
   try {
     loading.value = true;
+    const adminKey = import.meta.env.VITE_ADMIN_PASSWORD || '';
     await request.post('/api/admin/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
+      headers: { 'Content-Type': 'multipart/form-data', 'X-API-Key': adminKey }
     });
     showToast(`成功上传 ${files.length} 个文件`, 'success');
     await loadFiles();
@@ -500,7 +501,9 @@ async function deleteFile(item, type) {
 }
 
 function handleImageError(e) {
-  e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" fill="%23ddd"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23999">图片加载失败</text></svg>';
+  const PLACEHOLDER_SVG = `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="150" viewBox="0 0 200 150"><rect fill="%23f0f0f0" width="200" height="150"/><text x="100" y="75" text-anchor="middle" fill="%23999" font-size="14">图片加载失败</text></svg>')}`;
+  e.target.src = PLACEHOLDER_SVG;
+  e.target.onerror = null;
 }
 
 function formatDate(dateStr) {
@@ -527,7 +530,10 @@ async function addCard() {
     return;
   }
   try {
-    await request.post('/api/cards', { ...cardForm.value });
+    const adminKey = import.meta.env.VITE_ADMIN_PASSWORD || '';
+    await request.post('/api/cards', { ...cardForm.value }, {
+      headers: { 'X-API-Key': adminKey }
+    });
     showToast('添加成功', 'success');
     // 重置表单
     cardForm.value = {
@@ -559,22 +565,39 @@ async function confirmDelete() {
       // 删除文件
       const { item, fileType } = deleteTarget.value;
       const subdirMap = { background: 'tupian', audio: 'assets', docs: 'wenz' };
-      await request.delete(`/api/admin/file/${subdirMap[fileType]}/${item.filename}`);
+      const adminKey = import.meta.env.VITE_ADMIN_PASSWORD || '';
+      const encodedFilename = encodeURIComponent(item.filename);
+      await request.delete(`/api/admin/file/${subdirMap[fileType]}/${encodedFilename}`, {
+        headers: { 'X-API-Key': adminKey }
+      });
       showToast('删除成功', 'success');
       await loadFiles();
     } else if (deleteTarget.value.type === 'card') {
       // 删除卡片
-      await request.delete(`/api/cards/${deleteTarget.value.id}`);
+      await request.delete(`/api/cards/${deleteTarget.value.id}`, {
+        headers: { 'X-API-Key': import.meta.env.VITE_ADMIN_PASSWORD || '' }
+      });
       showToast('删除成功', 'success');
       await loadCards();
     } else if (deleteTarget.value.type === 'about') {
       // 删除关于页面项目
-      const { aboutType, index } = deleteTarget.value;
+      const { aboutType, index, itemId } = deleteTarget.value;
+      const adminKey = import.meta.env.VITE_ADMIN_PASSWORD || '';
+      try {
+        await request.delete(`/api/about/${itemId}`, {
+          headers: { 'X-API-Key': adminKey }
+        });
+      } catch (err) {
+        console.error('删除失败:', err);
+        showToast('删除失败', 'error');
+        return;
+      }
       if (aboutType === 'tags') {
         aboutForm.value.tags.splice(index, 1);
       } else if (aboutType === 'skills') {
         aboutForm.value.skills.splice(index, 1);
       }
+      showToast('删除成功', 'success');
     }
 
     showDeleteConfirm.value = false;
@@ -613,14 +636,14 @@ async function loadAboutContent() {
 
     // 处理技能标签
     if (data.tags && data.tags.length > 0) {
-      aboutForm.value.tags = data.tags.map(item => item.value);
+      aboutForm.value.tags = data.tags.map(item => ({ id: item.id, value: item.value }));
     } else {
       aboutForm.value.tags = [];
     }
 
     // 处理技能树
     if (data.skills && data.skills.length > 0) {
-      aboutForm.value.skills = data.skills.map(item => item.value);
+      aboutForm.value.skills = data.skills.map(item => ({ id: item.id, value: item.value }));
     } else {
       aboutForm.value.skills = [];
     }
@@ -644,27 +667,38 @@ async function loadAboutContent() {
 // 保存关于页面内容
 async function saveAboutContent() {
   savingAbout.value = true;
+  const adminKey = import.meta.env.VITE_ADMIN_PASSWORD || '';
   try {
     // 先删除旧数据
     const sections = ['intro', 'tags', 'skills', 'contact'];
     for (const section of sections) {
       const existing = await request.get(`/api/about/${section}`);
       for (const item of existing) {
-        await request.delete(`/api/about/${item.id}`);
+        await request.delete(`/api/about/${item.id}`, {
+          headers: { 'X-API-Key': adminKey }
+        });
       }
     }
 
     // 添加新数据
     // 个人简介
-    await request.post('/api/about', { section: 'intro', key: 'name', value: aboutForm.value.intro.name, sort_order: 1 });
-    await request.post('/api/about', { section: 'intro', key: 'subtitle', value: aboutForm.value.intro.subtitle, sort_order: 2 });
-    await request.post('/api/about', { section: 'intro', key: 'bio', value: aboutForm.value.intro.bio, sort_order: 3 });
+    await request.post('/api/about', { section: 'intro', key: 'name', value: aboutForm.value.intro.name, sort_order: 1 }, {
+      headers: { 'X-API-Key': adminKey }
+    });
+    await request.post('/api/about', { section: 'intro', key: 'subtitle', value: aboutForm.value.intro.subtitle, sort_order: 2 }, {
+      headers: { 'X-API-Key': adminKey }
+    });
+    await request.post('/api/about', { section: 'intro', key: 'bio', value: aboutForm.value.intro.bio, sort_order: 3 }, {
+      headers: { 'X-API-Key': adminKey }
+    });
 
     // 技能标签
     for (let i = 0; i < aboutForm.value.tags.length; i++) {
       const tag = aboutForm.value.tags[i];
       if (tag.trim()) {
-        await request.post('/api/about', { section: 'tags', key: 'tag', value: tag, sort_order: i + 1 });
+        await request.post('/api/about', { section: 'tags', key: 'tag', value: tag, sort_order: i + 1 }, {
+          headers: { 'X-API-Key': adminKey }
+        });
       }
     }
 
@@ -672,16 +706,22 @@ async function saveAboutContent() {
     for (let i = 0; i < aboutForm.value.skills.length; i++) {
       const skill = aboutForm.value.skills[i];
       if (skill.trim()) {
-        await request.post('/api/about', { section: 'skills', key: 'skill', value: skill, sort_order: i + 1 });
+        await request.post('/api/about', { section: 'skills', key: 'skill', value: skill, sort_order: i + 1 }, {
+          headers: { 'X-API-Key': adminKey }
+        });
       }
     }
 
     // 联系方式
     if (aboutForm.value.contact.email) {
-      await request.post('/api/about', { section: 'contact', key: 'email', value: aboutForm.value.contact.email, sort_order: 1 });
+      await request.post('/api/about', { section: 'contact', key: 'email', value: aboutForm.value.contact.email, sort_order: 1 }, {
+        headers: { 'X-API-Key': adminKey }
+      });
     }
     if (aboutForm.value.contact.github) {
-      await request.post('/api/about', { section: 'contact', key: 'github', value: aboutForm.value.contact.github, sort_order: 2 });
+      await request.post('/api/about', { section: 'contact', key: 'github', value: aboutForm.value.contact.github, sort_order: 2 }, {
+        headers: { 'X-API-Key': adminKey }
+      });
     }
 
     showToast('保存成功', 'success');
@@ -704,8 +744,10 @@ function addAboutItem(type) {
 
 // 删除关于页面项目
 function removeAboutItem(type, index) {
-  const value = type === 'tags' ? aboutForm.value.tags[index] : aboutForm.value.skills[index];
-  deleteTarget.value = { type: 'about', aboutType: type, index, value };
+  const item = type === 'tags' ? aboutForm.value.tags[index] : aboutForm.value.skills[index];
+  const value = typeof item === 'string' ? item : item.value;
+  const itemId = typeof item === 'object' ? item.id : null;
+  deleteTarget.value = { type: 'about', aboutType: type, index, value, itemId };
   showDeleteConfirm.value = true;
 }
 
@@ -733,11 +775,14 @@ async function saveEdit() {
     return;
   }
   try {
+    const adminKey = import.meta.env.VITE_ADMIN_PASSWORD || '';
     await request.put(`/api/cards/${editForm.value.id}`, {
       card_type: editForm.value.card_type,
       title: editForm.value.title,
       description: editForm.value.description,
       link: editForm.value.link
+    }, {
+      headers: { 'X-API-Key': adminKey }
     });
     showToast('保存成功', 'success');
     closeEditDialog();
