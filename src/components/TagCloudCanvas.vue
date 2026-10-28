@@ -1,6 +1,6 @@
 <template>
   <div class="tagcloud-canvas-wrap">
-    <canvas ref="canvasEl" class="tagcloud-canvas" @click="handleClick" @mousemove="handleMouseMove" @mouseleave="handleMouseLeave" />
+    <canvas ref="canvasEl" class="tagcloud-canvas" @click="handleClick" @pointerdown="handlePointerDown" @pointermove="handlePointerMove" @pointerup="handlePointerUp" @pointerleave="handlePointerLeave" @pointercancel="handlePointerCancel" />
   </div>
 </template>
 
@@ -16,9 +16,13 @@ const props = defineProps({
   height: { type: Number, default: 260 },
   // rotation speed (radians / frame-ish)
   speed: { type: Number, default: 0.0028 },
+  // 词云离开可视区或用户减少动态效果时，只绘制静态帧。
+  active: { type: Boolean, default: true },
   // font size range
   minFont: { type: Number, default: 12 },
   maxFont: { type: Number, default: 26 },
+  // 设置固定字号后，文字不再随权重、球体深度或悬浮状态缩放。
+  fontSize: { type: Number, default: 0 },
   // sphere radius factor based on container min side
   radiusScale: { type: Number, default: 0.62 }
 })
@@ -28,7 +32,10 @@ const emit = defineEmits(['select'])
 const canvasEl = ref(null)
 const rafId = ref(0)
 const hoveredName = ref('')
-const pointer = ref({ x: -1, y: -1 })
+let pressedTag = ''
+let pressPosition = null
+let pointerDown = false
+let dragged = false
 
 function clamp01(x) {
   return Math.max(0, Math.min(1, x))
@@ -118,6 +125,7 @@ function init() {
   state = {
     ctx,
     items,
+    drawnItems: [],
     rotX: 0.45,
     rotY: 0,
     // radius in pixels
@@ -160,10 +168,11 @@ function drawFrame() {
   const perspective = 0.9
   const depth = 2.2
 
-  // rotate a bit each frame; slow down when hovering
-  const hoverSlow = hoveredName.value ? 0.24 : 1
-  state.rotY += props.speed * hoverSlow
-  state.rotX += props.speed * 0.45 * hoverSlow
+  // 鼠标悬浮或手指按下时暂停，避免文字在点击过程中移出命中区域。
+  if (props.active && !document.hidden && !hoveredName.value && !pointerDown) {
+    state.rotY += props.speed
+    state.rotX += props.speed * 0.45
+  }
 
   // project + sort by z for painter's algorithm
   const projected = state.items.map((it) => {
@@ -178,48 +187,66 @@ function drawFrame() {
     const alpha = clamp01(0.15 + 0.85 * scale)
 
     return { it, sx, sy, z, scale, alpha }
-  }).sort((a, b) => a.z - b.z)
+  }).sort((a, b) => b.z - a.z)
+  state.drawnItems = projected.map(p => p.it)
 
   // draw tags
   for (const p of projected) {
     const isHover = hoveredName.value && p.it.value === hoveredName.value
     const fontScale = isHover ? 1.45 : 1
-    const fontSize = Math.max(10, Math.round(p.it.fontSize * (0.85 + p.scale * 0.72) * fontScale))
-    const fontWeight = isHover ? 900 : 650
+    const fontSize = props.fontSize > 0
+      ? props.fontSize
+      : Math.max(10, Math.round(p.it.fontSize * (0.85 + p.scale * 0.72) * fontScale))
+    const fontWeight = props.fontSize > 0 ? 650 : isHover ? 900 : 650
     ctx.font = `${fontWeight} ${fontSize}px Inter, system-ui, -apple-system, "Noto Sans SC", "Helvetica Neue", Arial`
-    const metrics = ctx.measureText(p.it.label)
+    // 长文档名保留完整值用于跳转，显示时省略尾部，防止手机文字越界。
+    let displayLabel = p.it.label
+    const maxTextWidth = Math.max(1, props.width - 24)
+    while (displayLabel.length > 1 && ctx.measureText(displayLabel).width > maxTextWidth) {
+      displayLabel = displayLabel.replace(/…$/, '').slice(0, -1) + '…'
+    }
+    const metrics = ctx.measureText(displayLabel)
     const w = metrics.width
     const h = fontSize
-    const x = p.sx - w / 2
+    const x = Math.max(12, Math.min(props.width - w - 12, p.sx - w / 2))
     const y = p.sy + h / 2
 
-    // store bounds for click detection
+    // 使用实际字形边界，包含中文下缘以及英文 g / p 等字母的下降部分。
+    const left = metrics.actualBoundingBoxLeft ?? 0
+    const right = metrics.actualBoundingBoxRight ?? w
+    const ascent = metrics.actualBoundingBoxAscent ?? h
+    const descent = metrics.actualBoundingBoxDescent ?? 0
     p.it.sx = p.sx
     p.it.sy = p.sy
     p.it.alpha = p.alpha
     p.it.scale = p.scale
-    p.it.bounds = { x, y: y - h, w, h }
+    p.it.bounds = { x: x - left, y: y - ascent, w: left + right, h: ascent + descent }
 
     const baseAlpha = p.alpha * (isHover ? 1 : 0.9)
     ctx.shadowBlur = isHover ? 10 : 0
     ctx.shadowColor = isHover ? 'rgba(30, 30, 30, 0.35)' : 'transparent'
     ctx.fillStyle = isHover ? `rgba(18,18,18,${Math.min(1, baseAlpha + 0.15)})` : `rgba(0,0,0,${baseAlpha * 0.72})`
-    ctx.fillText(p.it.label, x, y)
+    ctx.fillText(displayLabel, x, y)
   }
 
   ctx.restore()
 
-  rafId.value = requestAnimationFrame(drawFrame)
+  rafId.value = props.active && !document.hidden ? requestAnimationFrame(drawFrame) : 0
 }
 
 function pickTagAt(x, y) {
-  if (!state?.items?.length) return ''
-  // choose closest hit to pointer, then prefer front-most for ties
+  if (!state?.drawnItems?.length) return ''
+  // 精确命中优先选择最后绘制的可见文字，和屏幕上的覆盖顺序保持一致。
   const hits = []
-  for (const it of state.items) {
+  for (const it of [...state.drawnItems].reverse()) {
     const b = it.bounds
     if (!b) continue
     if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      return it.value || it.label
+    }
+    // 在字形周围留出少量点击余量，方便鼠标和触屏操作。
+    const padding = 5
+    if (x >= b.x - padding && x <= b.x + b.w + padding && y >= b.y - padding && y <= b.y + b.h + padding) {
       const cx = b.x + b.w / 2
       const cy = b.y + b.h / 2
       const dist2 = (x - cx) * (x - cx) + (y - cy) * (y - cy)
@@ -227,52 +254,94 @@ function pickTagAt(x, y) {
     }
   }
   if (!hits.length) return ''
-  hits.sort((a, b) => (a.dist2 - b.dist2) || (b.it.scale - a.it.scale) || (b.it.alpha - a.it.alpha))
+  hits.sort((a, b) => a.dist2 - b.dist2)
   const picked = hits[0].it
   return picked.value || picked.label
 }
 
-function handleMouseMove(e) {
-  if (!canvasEl.value) return
+function eventPosition(e) {
   const rect = canvasEl.value.getBoundingClientRect()
-  const x = e.clientX - rect.left
-  const y = e.clientY - rect.top
-  pointer.value = { x, y }
+  return {
+    x: (e.clientX - rect.left) * props.width / rect.width,
+    y: (e.clientY - rect.top) * props.height / rect.height
+  }
+}
+
+function handlePointerMove(e) {
+  if (!canvasEl.value) return
+  const { x, y } = eventPosition(e)
+  if (pressPosition && Math.hypot(x - pressPosition.x, y - pressPosition.y) > 8) dragged = true
+  if (e.pointerType === 'touch') return
   const name = pickTagAt(x, y)
   hoveredName.value = name
   canvasEl.value.style.cursor = name ? 'pointer' : 'default'
+  canvasEl.value.title = state?.items.find(item => item.value === name)?.label || ''
+  if (!rafId.value) drawFrame()
 }
 
-function handleMouseLeave() {
+function handlePointerLeave() {
   hoveredName.value = ''
-  pointer.value = { x: -1, y: -1 }
-  if (canvasEl.value) canvasEl.value.style.cursor = 'default'
+  if (canvasEl.value) {
+    canvasEl.value.style.cursor = 'default'
+    canvasEl.value.title = ''
+  }
+  // 触屏会在 pointerup 与 click 之间触发 leave，保留已经选定的文章。
+  if (pointerDown) handlePointerCancel()
+  if (!rafId.value) drawFrame()
+}
+
+function handlePointerDown(e) {
+  if (!canvasEl.value || e.button !== 0) return
+  pressPosition = eventPosition(e)
+  pressedTag = pickTagAt(pressPosition.x, pressPosition.y)
+  dragged = false
+  pointerDown = true
+}
+
+function handlePointerUp() {
+  pointerDown = false
+  pressPosition = null
+}
+
+function handlePointerCancel() {
+  handlePointerUp()
+  pressedTag = ''
+  dragged = true
 }
 
 function handleClick(e) {
   if (!canvasEl.value) return
-  const rect = canvasEl.value.getBoundingClientRect()
-  const x = e.clientX - rect.left
-  const y = e.clientY - rect.top
-  const name = pickTagAt(x, y)
+  const { x, y } = eventPosition(e)
+  const name = dragged ? '' : pressedTag || pickTagAt(x, y)
+  handlePointerUp()
+  pressedTag = ''
+  dragged = false
   if (name) emit('select', name)
 }
 
 watch(
-  () => [props.width, props.height, props.radiusScale, normalizedTags.value.map(t => `${t.value}:${t.label}:${t.count}`).join('|')].join('::'),
+  () => [props.width, props.height, props.radiusScale, props.fontSize, props.minFont, props.maxFont, normalizedTags.value.map(t => `${t.value}:${t.label}:${t.count}`).join('|')].join('::'),
   () => {
     cancelAnimationFrame(rafId.value)
     init()
-    rafId.value = requestAnimationFrame(drawFrame)
+    drawFrame()
   }
 )
 
+function updateAnimation() {
+  cancelAnimationFrame(rafId.value)
+  rafId.value = 0
+  drawFrame()
+}
+watch(() => props.active, updateAnimation)
 onMounted(() => {
   init()
-  rafId.value = requestAnimationFrame(drawFrame)
+  document.addEventListener('visibilitychange', updateAnimation)
+  drawFrame()
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', updateAnimation)
   cancelAnimationFrame(rafId.value)
 })
 </script>
@@ -286,7 +355,7 @@ onUnmounted(() => {
 
 .tagcloud-canvas {
   display: block;
-  margin: 0;
+  margin: 0 auto;
   border-radius: 0;
   background: transparent;
   border: none;

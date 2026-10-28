@@ -4,26 +4,40 @@ import html
 import uuid
 import logging
 import mimetypes
+import hashlib
 from datetime import datetime
 from functools import wraps
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 from collections import defaultdict
 from typing import Dict, List
 from threading import Lock
 from flask import Flask, jsonify, request, send_from_directory, make_response
-from werkzeug.utils import secure_filename
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
+from werkzeug.exceptions import HTTPException
+try:
+    from .security import configure_security, require_admin, validate_url
+    from .uploads import UPLOAD_EXTENSIONS, public_path, validate_file
+    from .content_admin import register_content_routes, read_pages
+    from .audio_metadata import read_audio_metadata, read_audio_cover
+except ImportError:
+    from security import configure_security, require_admin, validate_url
+    from uploads import UPLOAD_EXTENSIONS, public_path, validate_file
+    from content_admin import register_content_routes, read_pages
+    from audio_metadata import read_audio_metadata, read_audio_cover
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 load_dotenv(os.path.join(basedir, '..', '.env'))
 
 app = Flask(__name__)
+configure_security(app)
 
 # ---- CORS: restrict origins in production ----
-_cors_origins = os.getenv('CORS_ORIGINS', '*')
-CORS(app, resources={r"/api/*": {"origins": _cors_origins}})
+_cors_origins = [origin.strip() for origin in os.getenv('CORS_ORIGINS', '').split(',') if origin.strip()]
+app.config['ADMIN_ALLOWED_ORIGINS'] = _cors_origins
+if _cors_origins:
+    CORS(app, resources={r'/api/*': {'origins': _cors_origins}}, supports_credentials=True)
 
 # ---- Database config ----
 basedir = os.path.abspath(os.path.dirname(__file__))
@@ -50,10 +64,10 @@ logger = logging.getLogger(__name__)
 app.config['JSON_AS_ASCII'] = False
 app.config['JSON_SORT_KEYS'] = False
 
-PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
+PUBLIC_DIR = os.path.abspath(os.getenv('PUBLIC_DIR', os.path.join(basedir, 'public')))
+app.config['PUBLIC_DIR'] = PUBLIC_DIR
 
-# ---- Admin API Key ----
-ADMIN_API_KEY = os.getenv('VITE_ADMIN_PASSWORD', '')
+
 
 
 # ==================== 辅助数据类型（模块级数据定义，放在模型前避免前向引用） ====================
@@ -124,16 +138,20 @@ def build_public_file_url(subdir: str, filename: str) -> str:
     return f"/api/files/{subdir}/" + quote(filename)
 
 
+def upload_storage_filename(subdir: str, filename: str) -> str:
+    """封面使用可保存到现有地址字段和 Linux 文件系统的存储名。"""
+    if subdir == 'covers' and (len(build_public_file_url(subdir, filename)) > 500
+                              or len(filename.encode('utf-8')) > 255 or len(filename) > 200):
+        extension = os.path.splitext(filename)[1].lower()
+        return f'cover_{uuid.uuid4().hex}{extension}'
+    return filename
+
+
 def safe_send_public_file(subdir: str, filename: str):
     """安全地从 public 子目录返回文件，防止路径穿越。"""
-    base_dir = os.path.abspath(os.path.join(PUBLIC_DIR, subdir))
-    target_path = os.path.abspath(os.path.join(base_dir, filename))
+    target_path = public_path(PUBLIC_DIR, subdir, filename)
+    base_dir = str(target_path.parent)
 
-    if not target_path.startswith(base_dir + os.sep):
-        return jsonify({
-            'error': 'INVALID_PATH',
-            'message': '非法文件路径'
-        }), 400
     if not os.path.isfile(target_path):
         return jsonify({
             'error': 'NOT_FOUND',
@@ -145,9 +163,13 @@ def safe_send_public_file(subdir: str, filename: str):
     force_download_exts = {'.xmind', '.docx', '.pptx', '.xlsx'}
     as_attachment = ext in force_download_exts
 
+    if ext in ('.md', '.txt'):
+        mimetype = 'text/plain'
+    if ext not in UPLOAD_EXTENSIONS.get(subdir, UPLOAD_EXTENSIONS['tupian']):
+        as_attachment = True
     response = make_response(send_from_directory(base_dir, filename, as_attachment=as_attachment, mimetype=mimetype))
     # Cache-Control for static assets (images cached 1 hour)
-    if subdir == 'tupian':
+    if subdir in ('tupian', 'covers'):
         response.headers['Cache-Control'] = 'public, max-age=3600'
     return response
 
@@ -158,13 +180,18 @@ def handle_errors(f):
     def decorated_function(*args, **kwargs):
         try:
             return f(*args, **kwargs)
+        except HTTPException:
+            db.session.rollback()
+            raise
         except ValueError as e:
+            db.session.rollback()
             logger.warning(f"参数错误: {str(e)}")
             return jsonify({
                 'error': 'BAD_REQUEST',
                 'message': str(e)
             }), 400
         except Exception as e:
+            db.session.rollback()
             request_id = uuid.uuid4().hex[:8]
             logger.error(f"[{request_id}] API错误: {str(e)}", exc_info=True)
             return jsonify({
@@ -173,6 +200,48 @@ def handle_errors(f):
                 'request_id': request_id if app.debug else None
             }), 500
     return decorated_function
+
+
+def validate_card(data, partial=False):
+    if not isinstance(data, dict):
+        raise ValueError('请求体必须是对象')
+    result = {}
+    if not partial and not {'card_type', 'title'} <= set(data):
+        raise ValueError('缺少卡片类型或标题')
+    for key in ('card_type', 'title', 'description', 'link', 'sort_order'):
+        if key not in data:
+            continue
+        value = data[key]
+        if key == 'sort_order':
+            if type(value) is not int or not -10000 <= value <= 10000:
+                raise ValueError('排序需为 -10000 到 10000 的整数')
+        elif not isinstance(value, str) or len(value) > (2000 if key == 'description' else 500 if key == 'link' else 200):
+            raise ValueError('卡片字段格式或长度不合法')
+        elif key == 'card_type' and value not in ('intro', 'skill', 'tag'):
+            raise ValueError('无效的卡片类型')
+        elif key == 'title' and not value.strip():
+            raise ValueError('标题不能为空')
+        if key == 'link':
+            value = validate_url(value)
+        result[key] = value
+    return result
+
+
+def validate_about_item(data, partial=False):
+    if not isinstance(data, dict):
+        raise ValueError('请求体必须是对象')
+    if not partial and (data.get('section') not in ('intro', 'tags', 'skills', 'contact') or not isinstance(data.get('key'), str) or not data['key'] or len(data['key']) > 100):
+        raise ValueError('内容分区或字段不合法')
+    for key in ('value', 'extra'):
+        if key in data and (not isinstance(data[key], str) or len(data[key]) > 4000):
+            raise ValueError('内容必须是 4000 字以内的文本')
+    if 'sort_order' in data and (type(data['sort_order']) is not int or not -10000 <= data['sort_order'] <= 10000):
+        raise ValueError('排序格式错误')
+    if not partial and 'value' not in data:
+        raise ValueError('缺少内容')
+    if data.get('section') == 'contact' and data.get('key') == 'github':
+        validate_url(data.get('value', ''), 'GitHub 地址')
+    return data
 
 
 def validate_required_fields(data, required_fields):
@@ -188,25 +257,6 @@ def validate_required_fields(data, required_fields):
     return True
 
 
-def require_admin_api_key(f):
-    """API Key 认证装饰器，保护所有 /api/admin/* 路由"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        provided_key = request.headers.get('X-API-Key', '')
-        if not ADMIN_API_KEY:
-            logger.warning(f"Admin API accessed but ADMIN_API_KEY not configured")
-            return jsonify({
-                'error': 'CONFIG_ERROR',
-                'message': '管理接口未配置认证密钥'
-            }), 500
-        if not provided_key or provided_key != ADMIN_API_KEY:
-            logger.warning(f"Unauthorized admin access attempt from {request.remote_addr}")
-            return jsonify({
-                'error': 'UNAUTHORIZED',
-                'message': '无效的 API Key 或未提供认证信息'
-            }), 401
-        return f(*args, **kwargs)
-    return decorated_function
 
 
 # ==================== 评论限流 ====================
@@ -448,7 +498,8 @@ def get_articles():
     category_id = request.args.get('category_id', type=int)
 
     # 分页参数上限
-    per_page = min(per_page, 100)
+    page = max(1, page)
+    per_page = max(1, min(per_page, 100))
 
     query = Article.query.filter_by(is_published=True).options(
         db.joinedload(Article.category)
@@ -474,7 +525,7 @@ def get_article(article_id):
     """获取单篇文章详情"""
     article = Article.query.options(
         db.joinedload(Article.category)
-    ).get_or_404(article_id)
+    ).filter_by(id=article_id, is_published=True).first_or_404()
 
     # 原子更新浏览量（避免并发竞态）
     db.session.query(Article).filter_by(id=article_id).update(
@@ -493,7 +544,7 @@ def get_article(article_id):
 @handle_errors
 def like_article(article_id):
     """点赞文章（同一 IP 每小时限 10 次）"""
-    article = Article.query.get_or_404(article_id)
+    article = Article.query.filter_by(id=article_id, is_published=True).first_or_404()
 
     ip = request.remote_addr or 'unknown'
     key = f"like:{ip}:{article_id}"
@@ -519,7 +570,7 @@ def like_article(article_id):
     )
     db.session.commit()
 
-    article = Article.query.get(article_id)
+    article = Article.query.filter_by(id=article_id, is_published=True).first()
     return jsonify({
         'message': '点赞成功',
         'likes': article.likes
@@ -530,7 +581,7 @@ def like_article(article_id):
 @handle_errors
 def get_related_articles(article_id):
     """获取相关文章（基于同分类）"""
-    article = Article.query.get_or_404(article_id)
+    article = Article.query.filter_by(id=article_id, is_published=True).first_or_404()
     if not article.category_id:
         return jsonify({'articles': []})
 
@@ -557,7 +608,8 @@ def search_articles():
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 12, type=int)
-    per_page = min(per_page, 100)
+    page = max(1, page)
+    per_page = max(1, min(per_page, 100))
 
     pattern = f'%{q}%'
     query = Article.query.filter(
@@ -592,9 +644,9 @@ def get_categories():
 @handle_errors
 def create_comment():
     """创建评论（含输入校验、XSS 防护、频率限制）"""
-    data = request.json
-    if not data:
-        raise ValueError("请求体不能为空")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        raise ValueError("请求体必须是非空对象")
 
     # 频率限制
     ip = request.remote_addr or 'unknown'
@@ -608,12 +660,18 @@ def create_comment():
     article_id = data.get('article_id')
     if not article_id:
         raise ValueError("缺少必需字段: article_id")
-    article = Article.query.get(article_id)
+    article = Article.query.filter_by(id=article_id, is_published=True).first()
     if not article:
         return jsonify({
             'error': 'NOT_FOUND',
             'message': '文章不存在'
         }), 404
+
+    parent_id = data.get('parent_id')
+    if parent_id is not None:
+        parent = db.session.get(Comment, parent_id) if type(parent_id) is int else None
+        if not parent or parent.article_id != article.id:
+            raise ValueError('回复的评论不存在或不属于此文章')
 
     # 校验 author_name
     author_name = (data.get('author_name') or '').strip()
@@ -676,6 +734,16 @@ def serve_tupian_file(filename):
     return resp
 
 
+@app.route('/api/files/covers/<path:filename>', methods=['GET'])
+@handle_errors
+def serve_cover_file(filename: str):
+    """提供独立封面目录的栅格图片，不混入背景资源。"""
+    filepath = public_path(PUBLIC_DIR, 'covers', filename)
+    if filepath.suffix.lower() not in UPLOAD_EXTENSIONS['covers']:
+        return jsonify(error='NOT_FOUND', message='封面不存在'), 404
+    return safe_send_public_file('covers', filename)
+
+
 @app.route('/toux/<path:filename>', methods=['GET'])
 def serve_toux_file(filename):
     """提供头像目录访问（public/toux）"""
@@ -685,7 +753,7 @@ def serve_toux_file(filename):
 @app.route('/api/md-articles', methods=['GET'])
 def get_md_articles():
     """获取 public/wenz 文件夹中的文档列表"""
-    wenz_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public', 'wenz')
+    wenz_dir = os.path.join(PUBLIC_DIR, 'wenz')
 
     if not os.path.exists(wenz_dir):
         return jsonify({'articles': [], 'total': 0})
@@ -761,7 +829,7 @@ def get_md_articles():
 @app.route('/api/md-articles/<article_id>', methods=['GET'])
 def get_md_article(article_id):
     """获取单篇文档内容"""
-    wenz_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public', 'wenz')
+    wenz_dir = os.path.join(PUBLIC_DIR, 'wenz')
     if not os.path.exists(wenz_dir):
         return jsonify({
             'error': 'NOT_FOUND',
@@ -791,17 +859,17 @@ def get_md_article(article_id):
             'message': '文章不存在'
         }), 404
 
-    filepath = os.path.join(wenz_dir, matched_filename)
+    filepath = public_path(PUBLIC_DIR, 'wenz', matched_filename)
     ext = os.path.splitext(matched_filename)[1].lower()
 
     try:
-        if ext == '.md':
-            with open(filepath, 'r', encoding='utf-8') as f:
+        if ext in ('.md', '.txt'):
+            with open(filepath, 'r', encoding='utf-8-sig') as f:
                 content = f.read()
             return jsonify({
                 'content': content,
                 'filename': matched_filename,
-                'file_type': 'md',
+                'file_type': ext.lstrip('.'),
                 'file_url': build_public_file_url('wenz', matched_filename)
             })
 
@@ -822,34 +890,32 @@ def get_md_article(article_id):
 @app.route('/api/audio-files', methods=['GET'])
 def get_audio_files():
     """获取 public/assets 下可播放的音频列表"""
-    assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public', 'assets')
+    assets_dir = os.path.join(PUBLIC_DIR, 'assets')
     if not os.path.exists(assets_dir):
         return jsonify({'audios': [], 'total': 0})
 
-    exts = {'.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'}
     audios = []
 
     for filename in os.listdir(assets_dir):
-        filepath = os.path.join(assets_dir, filename)
-        if not os.path.isfile(filepath):
+        if os.path.splitext(filename)[1].lower() not in UPLOAD_EXTENSIONS['assets']:
+            continue
+        try:
+            filepath = public_path(PUBLIC_DIR, 'assets', filename)
+            if not filepath.is_file():
+                continue
+            stat = filepath.stat()
+        except (ValueError, OSError) as error:
+            logger.warning('忽略无效的音频文件：%s（%s）', filename, error)
             continue
 
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in exts:
-            continue
-
-        base_name = os.path.splitext(filename)[0]
-        if ' - ' in base_name:
-            name, artist = [x.strip() for x in base_name.split(' - ', 1)]
-        else:
-            name, artist = base_name, '未知艺术家'
+        name, artist = read_audio_metadata(filepath)
 
         audios.append({
             'filename': filename,
             'name': name,
             'artist': artist,
             'src': build_public_file_url('assets', filename),
-            'cover': ''
+            'cover': '/api/audio-cover/' + quote(filename) + f'?v={stat.st_mtime_ns}-{stat.st_size}'
         })
 
     audios.sort(key=lambda x: x['name'].lower())
@@ -860,169 +926,115 @@ def get_audio_files():
     })
 
 
+@app.route('/api/audio-cover/<filename>', methods=['GET'])
+@handle_errors
+def get_audio_cover(filename: str):
+    """只读返回公开音频的内嵌封面，按原文件版本缓存。"""
+    filepath = public_path(PUBLIC_DIR, 'assets', filename)
+    if filepath.suffix.lower() not in UPLOAD_EXTENSIONS['assets'] or not filepath.is_file():
+        return jsonify(error='NOT_FOUND', message='音频不存在'), 404
+    stat = filepath.stat()
+    version = f'{filename}\x00{stat.st_mtime_ns}\x00{stat.st_size}'
+    etag = hashlib.sha256(version.encode('utf-8')).hexdigest()
+    # 已验证过的同一音频版本复用浏览器封面，不再次解析标签和大图片。
+    if request.if_none_match.contains_weak(etag):
+        response = make_response('', 304)
+    else:
+        cover = read_audio_cover(filepath)
+        if cover is None:
+            response = jsonify(error='NOT_FOUND', message='没有可显示的内嵌封面')
+            response.status_code = 404
+            response.headers['Cache-Control'] = 'no-store'
+            return response
+        data, mimetype = cover
+        response = make_response(data)
+        response.content_type = mimetype
+    response.set_etag(etag)
+    response.last_modified = stat.st_mtime
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response.make_conditional(request)
+
+
 # ==================== 后台管理 API（需认证） ====================
 
+@app.route('/api/admin/upload-rules', methods=['GET'])
+@require_admin
+def upload_rules():
+    return jsonify(extensions={key: sorted(value) for key, value in UPLOAD_EXTENSIONS.items()},
+                   total_limit_mb=100, text_limit_mb=1, image_limit_mb=5, cover_limit_mb=5, audio_limit_mb=50, video_limit_mb=100, document_limit_mb=100)
+
+
 @app.route('/api/admin/upload', methods=['POST'])
-@require_admin_api_key
+@require_admin
 @handle_errors
 def upload_files():
-    """上传文件（含文件类型白名单、大小限制、MIME 校验、文件名安全）"""
-    if 'files' not in request.files:
-        raise ValueError("没有上传文件")
-
+    """校验内容后上传；响应准确报告成功和拒绝项。"""
     files = request.files.getlist('files')
     subdir = request.form.get('subdir', '')
-
-    allowed_dirs = {'tupian', 'assets', 'wenz'}
-    if subdir not in allowed_dirs:
-        raise ValueError("无效的上传目录")
-
-    # 文件类型白名单
-    allowed_exts = {
-        'tupian': {'.jpg', '.jpeg', '.png', '.webp', '.gif'},
-        'assets': {'.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'},
-        'wenz':   {'.md', '.pdf', '.docx', '.pptx', '.xlsx'},
-    }
-    ext_whitelist = allowed_exts.get(subdir, set())
-
-    # 文件大小限制（字节）
-    max_sizes = {
-        'tupian': 5 * 1024 * 1024,     # 5 MB
-        'assets': 50 * 1024 * 1024,    # 50 MB
-        'wenz':   100 * 1024 * 1024,   # 100 MB
-    }
-    max_size = max_sizes.get(subdir, 5 * 1024 * 1024)
-
-    base_upload_dir = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        'public',
-        subdir
-    )
-
-    os.makedirs(base_upload_dir, exist_ok=True)
-
-    uploaded = []
-    rejected = []
+    if subdir not in UPLOAD_EXTENSIONS or not files or len(files) > 20:
+        raise ValueError('请选择有效目录，每次最多上传 20 个文件')
+    validated, rejected = [], []
+    total = 0
     for file in files:
-        if file.filename == '':
-            continue
-
-        filename = secure_filename(file.filename)
-        if not filename:
-            continue
-
-        # 禁止路径穿越
-        if '..' in filename or '/' in filename or '\\' in filename:
-            rejected.append({'filename': file.filename, 'reason': '文件名包含非法字符'})
-            continue
-
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in ext_whitelist:
-            rejected.append({'filename': file.filename, 'reason': f'不支持的文件类型，仅支持: {", ".join(ext_whitelist)}'})
-            continue
-
-        # MIME 类型校验（检查扩展名与内容是否匹配）
-        file.seek(0, 2)
-        file_size = file.tell()
-        file.seek(0)
-        if file_size > max_size:
-            rejected.append({'filename': file.filename, 'reason': f'文件大小超过限制 ({max_size // 1024 // 1024}MB)'})
-            continue
-
-        guessed_mime, _ = mimetypes.guess_type(filename)
-        if guessed_mime and file.content_type:
-            if not file.content_type.startswith(guessed_mime.split('/')[0]) and file.content_type != 'application/octet-stream':
-                pass  # MIME check is lenient — rely on extension whitelist + size
-
-        filepath = os.path.join(base_upload_dir, filename)
-        counter = 1
-        while os.path.exists(filepath):
-            name, ext = os.path.splitext(filename)
-            filename = f"{name}_{counter}{ext}"
-            filepath = os.path.join(base_upload_dir, filename)
-            counter += 1
-
-        file.save(filepath)
+        try:
+            filename, size = validate_file(file, subdir)
+            total += size
+            validated.append((file, filename))
+        except ValueError as exc:
+            rejected.append({'filename': file.filename, 'reason': str(exc)})
+    if total > 100 * 1024 * 1024:
+        raise ValueError('本次上传文件总大小超过 100MB')
+    uploaded, uploaded_files = [], []
+    for file, filename in validated:
+        filename = upload_storage_filename(subdir, filename)
+        filepath = public_path(PUBLIC_DIR, subdir, filename)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        while True:
+            try:
+                output = filepath.open('xb')
+                break
+            except FileExistsError:
+                stem, ext = os.path.splitext(filename)
+                filename = upload_storage_filename(subdir, f'{stem}_{uuid.uuid4().hex[:8]}{ext}')
+                filepath = public_path(PUBLIC_DIR, subdir, filename)
+        try:
+            with output:
+                file.save(output)
+        except OSError:
+            filepath.unlink(missing_ok=True)
+            raise
         uploaded.append(filename)
-        logger.info(f"[{request.remote_addr}] 上传文件: {filepath}")
-
-    return jsonify({
-        'message': f'成功上传 {len(uploaded)} 个文件',
-        'uploaded': uploaded,
-        'count': len(uploaded),
-        'rejected': rejected
-    }), 201
+        uploaded_files.append({'filename': filename, 'url': build_public_file_url(subdir, filename)})
+        logger.info('管理员上传文件：%s', filename)
+    return jsonify(message=f'成功上传 {len(uploaded)} 个文件', uploaded=uploaded, files=uploaded_files,
+                   count=len(uploaded), rejected=rejected), 201 if uploaded else 400
 
 
 @app.route('/api/admin/file/<subdir>/<filename>', methods=['DELETE'])
-@require_admin_api_key
+@require_admin
 @handle_errors
 def delete_admin_file(subdir, filename):
-    """删除 public 目录下的文件"""
-    allowed_dirs = {'tupian', 'assets', 'wenz'}
-    if subdir not in allowed_dirs:
-        raise ValueError("无效的目录")
+    if subdir not in UPLOAD_EXTENSIONS:
+        raise ValueError('无效的目录')
+    filepath = public_path(PUBLIC_DIR, subdir, filename)
+    if not filepath.is_file():
+        return jsonify(message='文件不存在', error='NOT_FOUND'), 404
+    filepath.unlink()
+    logger.info('管理员删除文件：%s', filename)
+    return jsonify(message='删除成功', filename=filename)
 
-    base_dir = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        'public',
-        subdir
-    )
 
-    # URL 解码文件名
-    decoded_filename = unquote(filename)
-    
-    # 构建完整路径
-    filepath = os.path.join(base_dir, decoded_filename)
-    filepath = os.path.normpath(filepath)
-    base_dir = os.path.normpath(base_dir)
-
-    # 安全检查：确保路径在允许目录内
-    if not filepath.startswith(base_dir):
-        raise ValueError("非法文件路径")
-
-    # 检查文件是否存在
-    if not os.path.isfile(filepath):
-        # 文件不存在，可能是已被删除或文件名编码问题
-        # 搜索目录中是否有匹配的文件
-        found_filepath = None
-        try:
-            for f in os.listdir(base_dir):
-                if f == decoded_filename or unquote(f) == decoded_filename:
-                    found_filepath = os.path.join(base_dir, f)
-                    break
-        except Exception as e:
-            logger.error(f"搜索文件失败: {e}")
-        
-        if found_filepath and os.path.isfile(found_filepath):
-            filepath = found_filepath
-        else:
-            # 文件确实不存在，认为删除成功（幂等操作）
-            logger.warning(f"文件不存在（可能已被删除）: {decoded_filename}")
-            return jsonify({
-                'message': '删除成功（文件已不存在）',
-                'filename': filename,
-                'already_deleted': True
-            }), 200
-
-    # 删除文件
-    os.remove(filepath)
-    logger.warning(f"[{request.remote_addr}] 删除文件: {filepath}")
-
-    return jsonify({
-        'message': '删除成功',
-        'filename': filename
-    })
 
 
 @app.route('/api/admin/comments', methods=['GET'])
-@require_admin_api_key
+@require_admin
 @handle_errors
 def get_admin_comments():
     """后台管理：获取所有评论（含邮箱和 IP）"""
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
-    per_page = min(per_page, 100)
+    page = max(1, page)
+    per_page = max(1, min(per_page, 100))
 
     pagination = Comment.query.order_by(Comment.created_at.desc()).paginate(
         page=page, per_page=per_page, error_out=False
@@ -1037,7 +1049,7 @@ def get_admin_comments():
 
 
 @app.route('/api/admin/comments/<int:comment_id>', methods=['DELETE'])
-@require_admin_api_key
+@require_admin
 @handle_errors
 def delete_admin_comment(comment_id):
     """后台管理：删除评论"""
@@ -1067,29 +1079,21 @@ def get_cards():
 
 
 @app.route('/api/cards/seed', methods=['POST'])
+@require_admin
 @handle_errors
 def seed_cards():
-    """初始化示例卡片数据（幂等性：force=true 时先清空再插入）"""
-    force = request.json.get('force', False) if request.json else False
-
-    if force:
-        db.session.execute(db.text("DELETE FROM cards"))
-        db.session.commit()
-        _insert_seed_cards()
-        return jsonify({'message': '示例数据已强制重建', 'count': 15})
-
-    if Card.query.count() == 0:
-        _insert_seed_cards()
-        return jsonify({'message': '示例数据已初始化', 'count': 15})
-
-    return jsonify({'message': '示例数据已存在，如需重新初始化请使用 force=true'})
-
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict) or not isinstance(data.get('force', False), bool):
+        raise ValueError('force 必须是布尔值')
+    _insert_seed_cards(force=data.get('force', False))
+    return jsonify(message='卡片初始化完成', count=Card.query.count())
 
 def _insert_seed_cards(force=False):
     """插入种子卡片数据（由 init_db 和 seed_cards 共用）"""
     if force:
         db.session.execute(db.text("DELETE FROM cards"))
-        db.session.commit()
+    elif Card.query.count() > 0:
+        return
     cards = []
     for card_type, items in SEED_CARDS_DATA.items():
         for item in items:
@@ -1099,51 +1103,33 @@ def _insert_seed_cards(force=False):
 
 
 @app.route('/api/cards', methods=['POST'])
+@require_admin
 @handle_errors
 def create_card():
     """创建新卡片"""
-    data = request.json
-    if not data:
-        raise ValueError("请求体不能为空")
-
-    required_fields = ['card_type', 'title']
-    for field in required_fields:
-        if not data.get(field):
-            raise ValueError(f"缺少必需字段: {field}")
-
-    if data['card_type'] not in ('intro', 'skill', 'tag'):
-        raise ValueError("卡片类型必须是 'intro'、'skill' 或 'tag'")
-
-    card = Card(
-        card_type=data['card_type'],
-        title=data['title'],
-        description=data.get('description', ''),
-        link=data.get('link', ''),
-        sort_order=data.get('sort_order', 0)
-    )
+    data = validate_card(request.get_json(silent=True))
+    card = Card(**data)
     db.session.add(card)
     db.session.commit()
     return jsonify({'message': '创建成功', 'card': card.to_dict()}), 201
 
 
 @app.route('/api/cards/<int:card_id>', methods=['PUT'])
+@require_admin
 @handle_errors
 def update_card(card_id):
     """更新卡片"""
     card = Card.query.get_or_404(card_id)
-    data = request.json
-
-    # 仅允许 Card.to_dict() 中存在的字段
-    updatable_fields = ['card_type', 'title', 'description', 'link', 'sort_order']
-    for field in updatable_fields:
-        if field in data:
-            setattr(card, field, data[field])
+    data = validate_card(request.get_json(silent=True), partial=True)
+    for field, value in data.items():
+        setattr(card, field, value)
 
     db.session.commit()
     return jsonify({'message': '更新成功', 'card': card.to_dict()})
 
 
 @app.route('/api/cards/<int:card_id>', methods=['DELETE'])
+@require_admin
 @handle_errors
 def delete_card(card_id):
     """删除卡片"""
@@ -1156,7 +1142,7 @@ def delete_card(card_id):
 @app.route('/api/background-media', methods=['GET'])
 def get_background_media():
     """获取 public/tupian 下可用背景资源"""
-    media_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public', 'tupian')
+    media_dir = os.path.join(PUBLIC_DIR, 'tupian')
     if not os.path.exists(media_dir):
         return jsonify({'images': [], 'videos': [], 'total': 0})
 
@@ -1190,14 +1176,16 @@ def get_background_media():
 
 @app.route('/api/meta', methods=['GET'])
 def get_meta_info():
-    """获取 SEO Meta 信息"""
-    return jsonify({
-        'title': '沛心的个人博客',
-        'description': '一个充满赛博朋克风格的个人技术博客，分享编程心得与生活感悟',
-        'keywords': '博客, 技术, 编程, Vue, Python, Flask',
-        'author': '沛心'
-    })
+    site = read_pages(AboutContent)['site']
+    return jsonify({key: site[key] for key in ('title', 'description', 'keywords', 'author')})
 
+
+@app.route('/api/article-index', methods=['GET'])
+def get_article_index():
+    documents = get_md_articles().get_json()['articles']
+    rows = db.session.query(Article.id, Article.title, Article.views, Article.likes).filter_by(is_published=True).order_by(Article.updated_at.desc()).all()
+    posts = [dict(id=f'db-{row.id}', title=row.title, views=row.views, likes=row.likes, source='database') for row in rows]
+    return jsonify(articles=posts + documents, total=len(posts) + len(documents))
 
 # ==================== 站点地图 ====================
 
@@ -1206,16 +1194,17 @@ def get_sitemap():
     """生成站点地图 XML"""
     articles = Article.query.filter_by(is_published=True).order_by(Article.updated_at.desc()).limit(100).all()
 
+    base_url = os.getenv('SITE_URL', 'https://peixin.uno').rstrip('/')
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-        '  <url><loc>/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>',
-        '  <url><loc>/about</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>',
+        f'  <url><loc>{html.escape(base_url)}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>',
+        f'  <url><loc>{html.escape(base_url)}/about</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>',
     ]
 
-    base_url = os.getenv('SITE_URL', 'https://example.com')
+    base_url = os.getenv('SITE_URL', 'https://peixin.uno').rstrip('/')
     for article in articles:
-        url = f"{base_url}/article/{article.id}"
+        url = f"{base_url}/article/db-{article.id}"
         updated = article.updated_at.strftime('%Y-%m-%d') if article.updated_at else ''
         lines.append(f'  <url><loc>{url}</loc><lastmod>{updated}</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>')
 
@@ -1235,32 +1224,33 @@ def get_rss_feed():
         Article.created_at.desc()
     ).limit(20).all()
 
-    base_url = os.getenv('SITE_URL', 'https://example.com')
+    base_url = os.getenv('SITE_URL', 'https://peixin.uno').rstrip('/')
     build_date = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
 
     items = []
     for article in articles:
-        url = f"{base_url}/article/{article.id}"
+        url = f"{base_url}/article/db-{article.id}"
         pub_date = article.created_at.strftime('%a, %d %b %Y %H:%M:%S GMT')
         category = article.category.name if article.category else ''
         items.append(
             f'    <item>'
-            f'<title><![CDATA[{article.title}]]></title>'
+            f'<title>{html.escape(article.title)}</title>'
             f'<link>{url}</link>'
             f'<guid isPermaLink="true">{url}</guid>'
             f'<pubDate>{pub_date}</pubDate>'
-            f'<description><![CDATA[{article.summary or ""}]]></description>'
-            + (f'<category><![CDATA[{category}]]></category>' if category else '')
+            f'<description>{html.escape(article.summary or "")}</description>'
+            + (f'<category>{html.escape(category)}</category>' if category else '')
             + f'</item>'
         )
 
+    site = read_pages(AboutContent)['site']
     rss = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">\n'
         '  <channel>\n'
-        '    <title>沛心的个人博客</title>\n'
+        f'    <title>{html.escape(site["title"])}</title>\n'
         f'    <link>{base_url}</link>\n'
-        '    <description>一个充满赛博朋克风格的个人技术博客</description>\n'
+        f'    <description>{html.escape(site["description"])}</description>\n'
         '    <language>zh-CN</language>\n'
         f'    <lastBuildDate>{build_date}</lastBuildDate>\n'
         f'    <atom:link href="{base_url}/feed.xml" rel="self" type="application/rss+xml"/>\n'
@@ -1324,41 +1314,33 @@ def init_db():
             db.session.add_all(sample_articles)
             db.session.commit()
 
-            print('数据库初始化完成，示例数据已添加')
+            logger.info('数据库初始化完成，示例数据已添加')
 
-        # 幂等性：清理并重新插入 AboutContent
+        # 只为空内容表添加默认值，已有编辑内容不覆盖。
         _seed_about_content_upsert()
-        _insert_seed_cards(force=True)
+        _insert_seed_cards()
 
 
-def _seed_about_content_upsert():
-    """Upsert AboutContent 数据（存在则更新，不存在则创建）"""
-    # 先删除所有现有 AboutContent
-    db.session.execute(db.text("DELETE FROM about_content"))
+def _seed_about_content_upsert(reset=False):
+    """只为缺少简介数据的新库添加默认内容；显式重置也不影响页面文案。"""
+    sections = ('intro', 'tags', 'skills', 'contact')
+    query = AboutContent.query.filter(AboutContent.section.in_(sections))
+    if reset:
+        query.delete(synchronize_session=False)
+    elif query.count() > 0:
+        return
+    db.session.add_all([AboutContent(section=d.section, key=d.key, value=d.value, sort_order=d.sort_order) for d in ABOUT_CONTENTS_DATA])
     db.session.commit()
-
-    # 插入默认数据
-    items = []
-    for d in ABOUT_CONTENTS_DATA:
-        items.append(AboutContent(
-            section=d.section,
-            key=d.key,
-            value=d.value,
-            sort_order=d.sort_order
-        ))
-    db.session.add_all(items)
-    db.session.commit()
-
 
 # ==================== 关于页面 API ====================
 
 @app.route('/api/about', methods=['GET'])
 def get_about_content():
     """获取关于页面所有内容"""
-    contents = AboutContent.query.order_by(
+    contents = AboutContent.query.filter(~AboutContent.section.like('page_%')).order_by(
         AboutContent.section.asc(), AboutContent.sort_order.asc()
     ).all()
-    result = {}
+    result = {section: [] for section in ('intro', 'tags', 'skills', 'contact')}
     for c in contents:
         if c.section not in result:
             result[c.section] = []
@@ -1376,23 +1358,21 @@ def get_about_section(section):
 
 
 @app.route('/api/about/seed', methods=['POST'])
+@require_admin
 @handle_errors
 def seed_about_content():
     """初始化关于页面内容（幂等性：使用 upsert 逻辑）"""
-    _seed_about_content_upsert()
+    _seed_about_content_upsert(reset=True)
     count = len(ABOUT_CONTENTS_DATA)
     return jsonify({'message': '关于页面内容已重置', 'count': count})
 
 
 @app.route('/api/about', methods=['POST'])
+@require_admin
 @handle_errors
 def create_about_item():
     """添加关于页面内容"""
-    data = request.json
-    if not data:
-        raise ValueError("请求体不能为空")
-    if not data.get('section') or not data.get('key') or not data.get('value'):
-        raise ValueError("缺少必需字段: section, key, value")
+    data = validate_about_item(request.get_json(silent=True))
 
     item = AboutContent(
         section=data['section'],
@@ -1407,11 +1387,14 @@ def create_about_item():
 
 
 @app.route('/api/about/<int:item_id>', methods=['PUT'])
+@require_admin
 @handle_errors
 def update_about_item(item_id):
     """更新关于页面内容"""
     item = AboutContent.query.get_or_404(item_id)
-    data = request.json
+    data = validate_about_item(request.get_json(silent=True), partial=True)
+    if item.section == 'contact' and item.key == 'github' and 'value' in data:
+        validate_url(data['value'], 'GitHub 地址')
 
     if 'value' in data:
         item.value = data['value']
@@ -1425,6 +1408,7 @@ def update_about_item(item_id):
 
 
 @app.route('/api/about/<int:item_id>', methods=['DELETE'])
+@require_admin
 @handle_errors
 def delete_about_item(item_id):
     """删除关于页面内容"""
@@ -1432,6 +1416,27 @@ def delete_about_item(item_id):
     db.session.delete(item)
     db.session.commit()
     return jsonify({'message': '删除成功'})
+
+
+register_content_routes(app, db, Article, Category, Comment, AboutContent, handle_errors)
+
+
+@app.errorhandler(ValueError)
+def bad_request(error):
+    db.session.rollback()
+    return jsonify(error='BAD_REQUEST', message=str(error)), 400
+
+
+@app.errorhandler(HTTPException)
+def http_error(error):
+    return jsonify(error=error.name.upper().replace(' ', '_'), message='请求体超过 105MB 限制' if error.code == 413 else error.description), error.code
+
+
+@app.cli.command('init-db')
+def init_db_command():
+    """创建表并仅为没有内容的库添加默认数据。"""
+    init_db()
+    logger.info('数据库初始化检查完成，已有内容未覆盖')
 
 
 # ==================== 启动 ====================

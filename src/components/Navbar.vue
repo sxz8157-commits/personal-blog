@@ -1,18 +1,19 @@
 <template>
   <div class="navbar-root">
+    <button v-if="mobileMenuOpen" class="mobile-menu-backdrop" @click="mobileMenuOpen = false" aria-label="关闭导航菜单"></button>
     <nav class="navbar">
     <div class="navbar-container">
       <!-- 左侧：博客名称 -->
       <div class="brand-area">
-        <span class="brand-name" @click="goHome">沛心的博客</span>
+        <router-link to="/" class="brand-name" @click="mobileMenuOpen = false">{{ pagesStore.text('site', 'brand', '沛心的博客') }}</router-link>
       </div>
 
       <!-- 桌面端菜单 -->
       <div class="navbar-menu">
-        <router-link to="/" class="nav-link" active-class="active">首页</router-link>
-        <router-link to="/articles" class="nav-link" active-class="active">文章</router-link>
-        <router-link to="/about" class="nav-link" active-class="active">关于</router-link>
-        <router-link to="/more" class="nav-link" active-class="active">了解更多</router-link>
+        <router-link to="/" class="nav-link" active-class="active">{{ pagesStore.text('site', 'nav_home', '首页') }}</router-link>
+        <router-link to="/articles" class="nav-link" active-class="active">{{ pagesStore.text('site', 'nav_articles', '文章') }}</router-link>
+        <router-link to="/about" class="nav-link" active-class="active">{{ pagesStore.text('site', 'nav_about', '关于') }}</router-link>
+        <router-link to="/more" class="nav-link" active-class="active">{{ pagesStore.text('site', 'nav_more', '了解更多') }}</router-link>
 
         <!-- 音乐按钮 -->
         <button class="music-btn" @click="togglePlayer" :aria-label="playerOpen ? '关闭播放' : '听音乐'">
@@ -25,8 +26,14 @@
         </button>
       </div>
 
-      <!-- 移动端汉堡菜单 -->
-      <button class="hamburger" @click="mobileMenuOpen = !mobileMenuOpen" :class="{ active: mobileMenuOpen }">
+      <!-- 手机常用操作独立显示，菜单只展开导航入口 -->
+      <button class="compact-music-btn" @click="togglePlayer" :aria-label="playerOpen ? '关闭播放' : '听音乐'">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+          <path d="M9 18V5l12-2v13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="6" cy="18" r="3" fill="currentColor"/><circle cx="18" cy="16" r="3" fill="currentColor"/>
+        </svg>
+      </button>
+      <button class="hamburger" @click="mobileMenuOpen = !mobileMenuOpen" :class="{ active: mobileMenuOpen }" :aria-expanded="mobileMenuOpen" aria-controls="mobile-navigation" :aria-label="mobileMenuOpen ? '关闭导航菜单' : '打开导航菜单'">
         <span class="hamburger-line"></span>
         <span class="hamburger-line"></span>
         <span class="hamburger-line"></span>
@@ -35,11 +42,11 @@
 
     <!-- 移动端菜单面板 -->
     <transition name="mobile-menu-fade">
-      <div v-if="mobileMenuOpen" class="mobile-menu">
-        <router-link to="/" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">首页</router-link>
-        <router-link to="/articles" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">文章</router-link>
-        <router-link to="/about" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">关于</router-link>
-        <router-link to="/more" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">了解更多</router-link>
+      <div v-if="mobileMenuOpen" id="mobile-navigation" class="mobile-menu">
+        <router-link to="/" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">{{ pagesStore.text('site', 'nav_home', '首页') }}</router-link>
+        <router-link to="/articles" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">{{ pagesStore.text('site', 'nav_articles', '文章') }}</router-link>
+        <router-link to="/about" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">{{ pagesStore.text('site', 'nav_about', '关于') }}</router-link>
+        <router-link to="/more" class="mobile-link" active-class="active" @click="mobileMenuOpen = false">{{ pagesStore.text('site', 'nav_more', '了解更多') }}</router-link>
         <button class="mobile-music-btn" @click="togglePlayer">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
             <path d="M9 18V5l12-2v13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -61,7 +68,7 @@
         <!-- 歌曲信息 -->
         <div class="player-song-info">
           <div class="song-cover">
-            <img v-if="currentSong.cover" :src="currentSong.cover" :alt="currentSong.name" />
+            <img v-if="currentCover" :key="currentCover" :src="currentCover" :alt="currentSong.name + '封面'" @error="handleCoverError" />
             <div v-else class="song-cover-placeholder">
               <svg viewBox="0 0 24 24" width="32" height="32" fill="none">
                 <path d="M9 18V5l12-2v13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -74,6 +81,12 @@
             <h4 class="song-name">{{ currentSong.name }}</h4>
             <p class="song-artist">{{ currentSong.artist }}</p>
           </div>
+        </div>
+
+        <div class="player-status" role="status" aria-live="polite">
+          <span v-if="playlistLoading || audioLoading" class="status-spinner" aria-hidden="true"></span>
+          <span>{{ playerStatus }}</span>
+          <button v-if="playlistError" class="player-retry-btn" @click="retryPlaylist">重试</button>
         </div>
 
         <!-- 进度条 -->
@@ -90,13 +103,13 @@
 
         <!-- 控制按钮 -->
         <div class="player-controls">
-          <button class="control-btn" @click="prevSong" title="上一首">
+          <button class="control-btn" @click="prevSong" title="上一首" aria-label="上一首" :disabled="!playlist.length">
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
               <path d="M19 20L9 12l10-8v16z" fill="currentColor"/>
               <rect x="5" y="4" width="3" height="16" rx="1" fill="currentColor"/>
             </svg>
           </button>
-          <button class="control-btn play-btn" @click="togglePlay" :title="isPlaying ? '暂停' : '播放'">
+          <button class="control-btn play-btn" @click="togglePlay" :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" :disabled="!playlist.length">
             <svg v-if="isPlaying" viewBox="0 0 24 24" width="28" height="28" fill="none">
               <rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/>
               <rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>
@@ -105,7 +118,7 @@
               <path d="M8 5v14l11-7L8 5z" fill="currentColor"/>
             </svg>
           </button>
-          <button class="control-btn" @click="nextSong" title="下一首">
+          <button class="control-btn" @click="nextSong" title="下一首" aria-label="下一首" :disabled="!playlist.length">
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
               <path d="M5 4l10 8-10 8V4z" fill="currentColor"/>
               <rect x="16" y="4" width="3" height="16" rx="1" fill="currentColor"/>
@@ -123,11 +136,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { usePagesStore } from '@/stores/pages';
+const pagesStore = usePagesStore();
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 import request from '@/utils/request';
 
-const router = useRouter();
+const route = useRoute();
 const mobileMenuOpen = ref(false);
 const isPlaying = ref(false);
 const playerOpen = ref(false);
@@ -142,67 +157,104 @@ const progressPercent = computed(() => {
 
 // 播放列表 - 从后端动态获取
 const playlist = ref([]);
+const playlistLoading = ref(false);
+const playlistLoaded = ref(false);
+const playlistError = ref('');
+const audioLoading = ref(false);
+const playbackError = ref('');
+let playlistRequest = null;
+let playRequestId = 0;
+let idlePlaylistTask = null;
+let idlePlaylistIsTimeout = false;
+let disposed = false;
 
-async function fetchAudioPlaylist() {
-  try {
-    const data = await request.get('/api/audio-files');
-    const list = Array.isArray(data?.audios) ? data.audios : [];
-    if (!list.length) return;
+const playerStatus = computed(() => {
+  if (playlistLoading.value) return '正在加载歌曲列表…';
+  if (playlistError.value) return playlistError.value;
+  if (playlistLoaded.value && !playlist.value.length) return '暂时没有可播放的歌曲';
+  if (playbackError.value) return playbackError.value;
+  if (audioLoading.value) return '正在缓冲音频…';
+  return isPlaying.value ? '正在播放' : '点击播放开始听音乐';
+});
 
-    const normalized = list
-      .map(item => ({
+function fetchAudioPlaylist() {
+  if (playlistLoaded.value) return Promise.resolve();
+  if (playlistRequest) return playlistRequest;
+  playlistLoading.value = true;
+  playlistError.value = '';
+  playlistRequest = (async () => {
+    try {
+      const data = await request.get('/api/audio-files');
+      if (disposed) return;
+      const list = Array.isArray(data?.audios) ? data.audios : [];
+      playlist.value = list.map(item => ({
         name: String(item?.name || '').trim(),
         artist: String(item?.artist || '未知艺术家').trim(),
         src: String(item?.src || '').trim(),
-        cover: ''
-      }))
-      .filter(item => item.name && item.src);
-
-    if (normalized.length) {
-      playlist.value = normalized;
+        cover: normalizeCoverUrl(item?.cover)
+      })).filter(item => item.name && item.src);
+      playlistLoaded.value = true;
+    } catch (err) {
+      if (disposed) return;
+      playlistError.value = '歌曲列表加载失败，请重试';
+      console.error('加载音频列表失败:', err);
+    } finally {
+      playlistLoading.value = false;
+      playlistRequest = null;
     }
-  } catch (err) {
-    console.error('加载音频列表失败，使用内置播放列表:', err);
-  }
+  })();
+  return playlistRequest;
 }
 
 const currentSongIndex = ref(-1); // -1 表示还未播放过
 const currentSong = computed(() => {
   if (currentSongIndex.value === -1) {
-    return { name: '暂无播放', artist: '点击播放开始', cover: '' };
+    return { name: playlistLoading.value ? '正在加载歌曲' : '暂无播放', artist: playlistError.value || '点击播放开始', cover: '' };
   }
   return playlist.value[currentSongIndex.value] || { name: '暂无播放', artist: '点击播放开始', cover: '' };
 });
+const failedCoverSrc = ref('');
+const currentCover = computed(() => currentSong.value.cover && currentSong.value.cover !== failedCoverSrc.value ? currentSong.value.cover : '');
+watch(currentSongIndex, () => { failedCoverSrc.value = ''; });
+
+function normalizeCoverUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  try {
+    const url = new URL(value.trim(), window.location.origin);
+    return url.origin === window.location.origin && url.pathname.startsWith('/api/audio-cover/') ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function handleCoverError(event) {
+  failedCoverSrc.value = event.currentTarget?.src || '';
+}
 
 const audioEl = ref(null);
 const handleTimeUpdate = () => {
   if (!audioEl.value) return;
   currentTime.value = audioEl.value.currentTime;
-  duration.value = audioEl.value.duration || 0;
+  duration.value = Number.isFinite(audioEl.value.duration) ? audioEl.value.duration : 0;
 };
 const handleEnded = () => {
   nextSong();
 };
-const handleAudioError = (e) => {
-  console.error('音频加载失败:', e);
-  if (playlist.value.length > 1) {
-    nextSong();
-  } else {
-    isPlaying.value = false;
-  }
+const handleAudioError = () => {
+  if (!audioEl.value?.error) return;
+  audioLoading.value = false;
+  isPlaying.value = false;
+  playbackError.value = '音频加载失败，点击播放重试或切换歌曲';
+  console.error('音频加载失败:', { code: audioEl.value.error.code, song: currentSong.value.name });
 };
-
-function buildPublicAssetPath(relativePath) {
-  const normalized = String(relativePath || '').replace(/^\/+/, '')
-  const base = import.meta.env.BASE_URL || '/'
-  return new URL(normalized, window.location.origin + base).toString()
-}
-
-function goHome() {
-  router.push('/');
-}
-
-
+const handleAudioWaiting = () => { if (currentSongIndex.value >= 0) audioLoading.value = true; };
+const handleAudioPlaying = () => { audioLoading.value = false; isPlaying.value = true; playbackError.value = ''; };
+const handleAudioPause = () => { isPlaying.value = false; };
+const handleAudioMetadata = () => { handleTimeUpdate(); };
+const handleKeydown = event => {
+  if (event.key === 'Escape') { mobileMenuOpen.value = false; closePlayer(); }
+};
+watch(() => route.fullPath, () => { mobileMenuOpen.value = false; });
 
 function normalizeIndex(index) {
   const len = playlist.value.length;
@@ -235,23 +287,46 @@ function playRandomSong(excludeIndex = -1) {
 function playSong(index) {
   if (!audioEl.value || index < 0 || index >= playlist.value.length) return;
   const song = playlist.value[index];
+  audioEl.value.pause();
+  currentTime.value = 0;
+  duration.value = 0;
+  playbackError.value = '';
+  audioLoading.value = true;
   audioEl.value.src = song.src;
-  
+  requestPlayback();
+}
+
+function requestPlayback() {
+  if (!audioEl.value) return;
+  const requestId = ++playRequestId;
+  audioLoading.value = true;
+  playbackError.value = '';
   audioEl.value.play().then(() => {
-    isPlaying.value = true;
+    if (requestId !== playRequestId || disposed) return;
+    audioLoading.value = false;
+    isPlaying.value = !audioEl.value.paused;
   }).catch(err => {
+    if (requestId !== playRequestId || disposed) return;
+    audioLoading.value = false;
+    isPlaying.value = false;
+    playbackError.value = err.name === 'NotAllowedError' ? '歌曲已准备好，请点击播放' : '播放失败，请点击播放重试';
     console.error('播放失败:', err);
   });
 }
 
 // 切换播放器显示
-function togglePlayer() {
+async function togglePlayer() {
+  mobileMenuOpen.value = false;
   playerOpen.value = !playerOpen.value;
-  
-  // 打开播放器且还没播放过，随机播放
-  if (playerOpen.value && currentSongIndex.value === -1) {
-    playRandomSong();
-  }
+  if (!playerOpen.value || currentSongIndex.value !== -1) return;
+  await fetchAudioPlaylist();
+  // 列表完成前关闭播放器时不启动音频。
+  if (playerOpen.value && !disposed && currentSongIndex.value === -1) playRandomSong();
+}
+
+async function retryPlaylist() {
+  await fetchAudioPlaylist();
+  if (playerOpen.value && !disposed && currentSongIndex.value === -1) playRandomSong();
 }
 
 function closePlayer() {
@@ -269,12 +344,13 @@ function togglePlay() {
   }
   
   if (isPlaying.value) {
+    ++playRequestId;
     audioEl.value.pause();
     isPlaying.value = false;
+    audioLoading.value = false;
   } else {
-    audioEl.value.play().then(() => {
-      isPlaying.value = true;
-    }).catch(() => {});
+    if (audioEl.value.error) audioEl.value.load();
+    requestPlayback();
   }
 }
 
@@ -305,32 +381,54 @@ function nextSong() {
 function seekTo(event) {
   if (!audioEl.value || duration.value === 0) return;
   const rect = event.currentTarget.getBoundingClientRect();
-  const percent = (event.clientX - rect.left) / rect.width;
+  const percent = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
   audioEl.value.currentTime = percent * duration.value;
 }
 
 // 格式化时间
 function formatTime(seconds) {
-  if (!seconds || isNaN(seconds)) return '0:00';
+  if (!seconds || !Number.isFinite(seconds)) return '0:00';
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 onMounted(() => {
-  fetchAudioPlaylist();
+  // 背景空闲时预取歌曲信息，音频文件在选择歌曲后才请求。
+  if ('requestIdleCallback' in window) {
+    idlePlaylistTask = window.requestIdleCallback(() => fetchAudioPlaylist(), { timeout: 1500 });
+  } else {
+    idlePlaylistIsTimeout = true;
+    idlePlaylistTask = window.setTimeout(() => fetchAudioPlaylist(), 500);
+  }
+  window.addEventListener('keydown', handleKeydown);
   if (audioEl.value) {
     audioEl.value.addEventListener('timeupdate', handleTimeUpdate);
     audioEl.value.addEventListener('ended', handleEnded);
     audioEl.value.addEventListener('error', handleAudioError);
+    audioEl.value.addEventListener('waiting', handleAudioWaiting);
+    audioEl.value.addEventListener('playing', handleAudioPlaying);
+    audioEl.value.addEventListener('pause', handleAudioPause);
+    audioEl.value.addEventListener('loadedmetadata', handleAudioMetadata);
   }
 });
 
 onUnmounted(() => {
+  disposed = true;
+  ++playRequestId;
+  if (idlePlaylistTask !== null) {
+    if (idlePlaylistIsTimeout) window.clearTimeout(idlePlaylistTask);
+    else window.cancelIdleCallback(idlePlaylistTask);
+  }
+  window.removeEventListener('keydown', handleKeydown);
   if (audioEl.value) {
     audioEl.value.removeEventListener('timeupdate', handleTimeUpdate);
     audioEl.value.removeEventListener('ended', handleEnded);
     audioEl.value.removeEventListener('error', handleAudioError);
+    audioEl.value.removeEventListener('waiting', handleAudioWaiting);
+    audioEl.value.removeEventListener('playing', handleAudioPlaying);
+    audioEl.value.removeEventListener('pause', handleAudioPause);
+    audioEl.value.removeEventListener('loadedmetadata', handleAudioMetadata);
     audioEl.value.pause();
     isPlaying.value = false;
   }
@@ -368,11 +466,16 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .brand-name {
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 700;
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   letter-spacing: 0.6px;
   color: #1a1a1a;
   user-select: none;
@@ -480,7 +583,7 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 .player-card {
   position: relative;
   padding: 24px;
-  background: rgba(255, 255, 255, 0.65) !important;
+  background: rgba(255, 255, 255, 0.15);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   border-radius: 16px;
@@ -545,6 +648,38 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 .song-details {
   flex: 1;
   min-width: 0;
+}
+
+.player-status {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #666;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.status-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(168, 85, 247, 0.2);
+  border-top-color: #9333ea;
+  border-radius: 50%;
+  animation: spin-note 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.player-retry-btn {
+  border: 0;
+  color: #7c3aed;
+  background: rgba(168, 85, 247, 0.08);
+  border-radius: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  cursor: pointer;
 }
 
 .song-name {
@@ -642,6 +777,8 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   cursor: pointer;
   transition: all 0.3s ease;
 
+  &:disabled { opacity: 0.45; cursor: default; transform: none; }
+
   &:hover {
     background: rgba(168, 85, 247, 0.1);
     border-color: rgba(168, 85, 247, 0.25);
@@ -704,6 +841,9 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
     .hamburger-line:nth-child(3) { transform: rotate(-45deg) translate(5px, -5px); }
   }
 }
+
+.compact-music-btn { display: none; }
+.mobile-menu-backdrop { display: none; }
 
 // ===== 移动端菜单 =====
 .mobile-menu {
@@ -771,15 +911,104 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 @media (max-width: 768px) {
+  .navbar { background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%); }
   .navbar-menu { display: none; }
-  .hamburger { display: flex; }
-  .navbar-container { padding: 14px 1rem; }
-  
-  .music-player-popup {
-    right: 1rem;
-    left: 1rem;
-    width: auto;
+  .navbar-container { height: 56px; padding: 0 12px 0 16px; gap: 6px; }
+  .brand-area { flex: 1; }
+  .brand-name { font-size: 16px; line-height: 44px; letter-spacing: 0; }
+  .hamburger { display: flex; width: 44px; height: 44px; align-items: center; justify-content: center; padding: 0; flex-shrink: 0; }
+  .compact-music-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(168, 85, 247, 0.08);
+    color: #9333ea;
+    cursor: pointer;
+    flex-shrink: 0;
   }
+  .mobile-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 16px;
+    right: 16px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  }
+  .mobile-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 8px;
+    font-size: 15px;
+    border: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+  .mobile-link.active { background: rgba(168, 85, 247, 0.16); color: #7c3aed; }
+  .mobile-music-btn {
+    grid-column: 1 / -1;
+    min-height: 44px;
+    justify-content: center;
+    margin: 0;
+    padding: 8px 16px;
+    color: #7c3aed;
+    font-size: 14px;
+    border-radius: 10px;
+  }
+  .mobile-menu-backdrop {
+    display: block;
+    position: fixed;
+    inset: 56px 0 0;
+    background: rgba(15, 23, 42, 0.14);
+    border: 0;
+    z-index: 999;
+    touch-action: manipulation;
+  }
+  .music-player-popup {
+    top: auto;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    right: 16px;
+    left: 16px;
+    width: auto;
+    max-width: 398px;
+    margin: 0 auto;
+  }
+  .player-card { padding: 20px; background: rgba(255, 255, 255, 0.15); border-radius: 20px; }
+  .player-close-btn { width: 44px; height: 44px; line-height: 44px; top: 6px; right: 6px; font-size: 24px; }
+  .player-song-info { gap: 12px; margin-bottom: 10px; padding-right: 32px; }
+  .song-cover { width: 48px; height: 48px; border-radius: 10px; }
+  .song-name { font-size: 16px; line-height: 1.4; }
+  .song-artist { font-size: 13px; line-height: 1.5; }
+  .player-status { min-height: 32px; font-size: 12px; }
+  .player-retry-btn { min-height: 44px; }
+  .player-progress { margin-bottom: 12px; }
+  .progress-bar { height: 32px; margin: 0; background: transparent; }
+  .progress-bar:hover { height: 32px; }
+  .progress-bar::before { content: ''; position: absolute; left: 0; right: 0; top: 14px; height: 4px; background: #e7e4ec; border-radius: 4px; }
+  .progress-track { top: 14px; height: 4px; }
+  .progress-thumb { opacity: 1; }
+  .progress-time { font-size: 12px; }
+  .player-controls { gap: 24px; }
+  .control-btn { width: 48px; height: 48px; }
+  .play-btn { width: 60px; height: 60px; }
+  .player-fade-enter-from, .player-fade-leave-to { transform: translateY(14px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-spinner { animation-duration: 1.5s; }
+  .mobile-menu-fade-enter-active, .mobile-menu-fade-leave-active,
+  .player-fade-enter-active, .player-fade-leave-active { transition: none; }
 }
 </style>
 

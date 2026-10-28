@@ -1,8 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
-import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
+import { ElIcon } from 'element-plus'
 import App from './App.vue'
 import router from './router'
 import './styles/main.scss'
@@ -10,13 +8,11 @@ import './styles/main.scss'
 const app = createApp(App)
 const pinia = createPinia()
 
-// 注册 Element Plus 图标
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(key, component)
-}
-
+// 页面只使用图标容器；按需注册，避免首屏下载整套组件和所有图标。
+app.component('ElIcon', ElIcon)
 app.use(pinia)
 app.use(router)
-app.use(ElementPlus, { locale: zhCn })
 
 app.mount('#app')
+// Vue 已显示动态加载页后，移除脚本下载阶段的静态首屏。
+document.getElementById('boot-loading')?.remove()

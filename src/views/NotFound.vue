@@ -2,9 +2,9 @@
   <div class="not-found-page">
     <div class="not-found-content glass-card">
       <div class="error-code">404</div>
-      <h1 class="error-title">页面未找到</h1>
+      <h1 class="error-title">{{ pagesStore.text('not_found', 'title', '页面未找到') }}</h1>
       <p class="error-description">
-        抱歉，您访问的页面不存在或已被移除。
+        {{ pagesStore.text('not_found', 'description', '抱歉，您访问的页面不存在或已被移除。') }}
       </p>
       <div class="action-buttons">
         <router-link to="/" class="btn-primary">
@@ -12,20 +12,20 @@
             <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             <polyline points="9 22 9 12 15 12 15 22" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          返回首页
+          {{ pagesStore.text('not_found', 'home_button', '返回首页') }}
         </router-link>
         <router-link to="/articles" class="btn-ghost">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
             <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
             <path d="M8 7h8M8 11h8M8 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
-          浏览文章
+          {{ pagesStore.text('not_found', 'articles_button', '浏览文章') }}
         </router-link>
         <button @click="goBack" class="btn-ghost">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
             <path d="M19 12H5M5 12l6 6M5 12l6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          返回上一页
+          {{ pagesStore.text('not_found', 'back_button', '返回上一页') }}
         </button>
       </div>
     </div>
@@ -33,6 +33,8 @@
 </template>
 
 <script setup>
+import { usePagesStore } from '@/stores/pages';
+const pagesStore = usePagesStore();
 import { useRouter } from 'vue-router'
 
 const router = useRouter()

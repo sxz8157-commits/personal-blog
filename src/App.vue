@@ -1,38 +1,19 @@
 <template>
   <div id="app">
-    <!-- 全屏随机背景 -->
-    <div class="global-bg" aria-hidden="true">
-      <!-- 图片背景 -->
-      <div 
-        v-if="bgType === 'image'" 
-        class="bg-image" 
-        :class="{ loaded: bgLoaded }" 
-        :style="{ backgroundImage: currentBg ? `url(${currentBg})` : 'none' }"
-      ></div>
-      <!-- 视频背景 -->
-      <video 
-        v-if="bgType === 'video'" 
-        class="bg-video" 
-        :class="{ loaded: bgLoaded }"
-        autoplay 
-        loop 
-        muted 
-        playsinline
-        :src="currentBg"
-      ></video>
-      <div class="bg-fallback"></div>
-    </div>
+    <BackgroundMedia ref="backgroundPlayer" />
 
-    <!-- Loading Screen -->
+    <!-- 首次进入等待背景和页面准备完成，统计请求不再单独控制退场。 -->
     <transition name="loading-fade">
-      <div v-if="appStore.isLoading" class="loading-screen">
-        <div class="loading-spinner"></div>
-        <p class="loading-text">加载中...</p>
-      </div>
+      <StartupLoading
+        v-if="startupLoading"
+        :brand="pagesStore.text('site', 'brand', '沛心的博客')"
+        :message="startupMessage"
+        :ready="startupReady"
+      />
     </transition>
 
     <!-- 主内容区域 -->
-    <div v-show="!appStore.isLoading" class="app-content">
+    <div v-show="!startupLoading" class="app-content">
       <Navbar />
       <main class="page-container">
         <router-view v-slot="{ Component }">
@@ -47,102 +28,215 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { usePagesStore } from '@/stores/pages';
+const pagesStore = usePagesStore();
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import request from '@/utils/request'
 import Navbar from '@/components/Navbar.vue'
 import BackToTop from '@/components/BackToTop.vue'
+import StartupLoading from '@/components/StartupLoading.vue'
+import BackgroundMedia from '@/components/BackgroundMedia.vue'
+import { normalizeBackgroundMedia, chooseDifferentBackground, createBackgroundRotation } from '@/utils/backgroundMedia'
+import startupBackground from './assets/startup-background.webp'
 
 const appStore = useAppStore()
-const currentBg = ref('')
-const bgLoaded = ref(false)
-const bgType = ref('image') // 'image' 或 'video'
-const bgImages = ref([])
-const bgVideos = ref([])
+const route = useRoute()
+const router = useRouter()
+function updateMeta() {
+  const routePages = { Home:'home', Articles:'articles', About:'about', More:'more', NotFound:'not_found' }
+  const site = pagesStore.text('site','title','沛心的个人博客')
+  const title = pagesStore.text(routePages[route.name], 'title', route.meta.title || '')
+  document.title = route.name === 'Home' ? site : `${title} - ${site}`
+  for (const key of ['description','keywords','author']) {
+    let tag = document.querySelector(`meta[name="${key}"]`)
+    if (!tag) { tag = document.createElement('meta'); tag.name = key; document.head.appendChild(tag) }
+    tag.content = pagesStore.text('site',key,'')
+  }
+}
+watch(() => [route.path, pagesStore.pages], updateMeta, { deep:true, immediate:true })
+const backgroundPlayer = ref(null)
+const startupLoading = ref(true)
+const startupReady = ref(false)
+const startupMessage = ref('正在加载背景与页面内容…')
 const LAST_BG_KEY = 'peixin-last-bg-url'
+const MEDIA_TIMEOUT = 4_000
+const STARTUP_TIMEOUT = 6_000
+const ROTATION_INTERVAL = 30_000
+const FIRST_ROTATION_DELAY = 1_000
+const backgroundRequest = new AbortController()
+let rotationRequest = null
+let startupTimer = null
+let completionTimer = null
+let rotationTimer = null
+let disposed = false
+let startupExpired = false
+let rotationEpoch = 0
+let mediaPool = []
+let rotation = null
+let indexReady = false
+let currentBackgroundUrl = ''
+let firstRotation = true
+const previousBackground = lastBackground()
+const failedMedia = new Set()
 
 function buildPublicAssetPath(relativePath) {
-  // 去掉开头多余的 /
   const normalized = String(relativePath || '').replace(/^\/+/, '')
-  // 基础路径用 / ，和vite.config.js的base保持一致
-  const base = import.meta.env.BASE_URL || '/'
-  // 最终生成：https://peixin.uno/toux/img.png 这种格式
-  return new URL(normalized, window.location.origin + base).toString()
+  return new URL(normalized, window.location.origin + (import.meta.env.BASE_URL || '/')).toString()
 }
 
-function chooseDifferentRandom(list, previousUrl) {
-  if (!Array.isArray(list) || list.length === 0) return null
-  if (list.length === 1) return list[0]
-
-  const candidates = list.filter(item => item.url !== previousUrl)
-  const pool = candidates.length ? candidates : list
-  return pool[Math.floor(Math.random() * pool.length)]
+function lastBackground() {
+  try { return sessionStorage.getItem(LAST_BG_KEY) || '' }
+  catch (error) { console.warn('无法读取上次背景记录，将直接选择:', error); return '' }
 }
 
-async function loadBackgroundMedia() {
+function rememberBackground(url) {
+  try { sessionStorage.setItem(LAST_BG_KEY, url) }
+  catch (error) { console.warn('无法保存背景记录，不影响显示:', error) }
+}
+
+function displayMedia(media) {
+  // 预载图片与首屏使用同一URL，其他图片/视频继续使用实际文件地址。
+  const url = media.type === 'image' && media.filename === 'img.png' ? startupBackground : media.url
+  return { ...media, url: buildPublicAssetPath(url) }
+}
+
+async function loadBackgroundIndex(signal) {
   try {
-    const data = await request.get('/api/background-media')
-    bgImages.value = Array.isArray(data?.images) ? data.images : []
-    bgVideos.value = Array.isArray(data?.videos) ? data.videos : []
-    } catch (err) {
-    console.error('加载背景资源失败，使用默认背景:', err)
-    // 修正路径，用 / 开头的根路径
-    bgImages.value = [{ filename: 'img.png', url: '/api/files/toux/img.png' }]
-    bgVideos.value = []
+    const data = await request.get('/api/background-media', { timeout: 3000, signal })
+    if (disposed || signal?.aborted) return false
+    mediaPool = normalizeBackgroundMedia(data)
+    rotation = createBackgroundRotation(mediaPool, { previousUrl: currentBackgroundUrl })
+    failedMedia.clear()
+    indexReady = true
+    return true
+  } catch (error) {
+    if (!disposed && !signal?.aborted) console.warn('背景列表暂时不可用，将保留当前壁纸并重试:', error.message)
+    indexReady = false
+    return false
   }
 }
 
-// 每次刷新尽量换一个新的背景
-function pickRandomBg() {
-  const prev = sessionStorage.getItem(LAST_BG_KEY) || ''
+async function initializeBackground() {
+  await loadBackgroundIndex(backgroundRequest.signal)
+  if (disposed || startupExpired) return
+  const image = chooseDifferentBackground(mediaPool.filter(item => item.type === 'image'), previousBackground)
+  const initial = image || { type: 'image', filename: 'img.png', url: startupBackground }
+  startupMessage.value = '正在准备背景…'
+  await nextTick()
+  const ready = await backgroundPlayer.value?.show(displayMedia(initial), { timeout: MEDIA_TIMEOUT, signal: backgroundRequest.signal })
+  if (ready && !disposed && !startupExpired) {
+    currentBackgroundUrl = image?.url || ''
+    if (image) rememberBackground(image.url)
+  }
+}
 
-  // 优先视频；没有视频再选图片
-  const pickVideo = bgVideos.value.length > 0
-  if (pickVideo) {
-    const chosen = chooseDifferentRandom(bgVideos.value, prev)
-    if (chosen) {
-      bgType.value = 'video'
-      currentBg.value = buildPublicAssetPath(chosen.url)
-      bgLoaded.value = true
-      sessionStorage.setItem(LAST_BG_KEY, chosen.url)
-      return
+function scheduleRotation(delay = ROTATION_INTERVAL) {
+  clearTimeout(rotationTimer)
+  rotationTimer = null
+  if (disposed || startupLoading.value || document.hidden) return
+  rotationTimer = setTimeout(() => { rotationTimer = null; rotateBackground() }, delay)
+}
+
+async function rotateBackground() {
+  if (disposed || startupLoading.value || document.hidden) return
+  const epoch = rotationEpoch
+  try {
+    if (!indexReady || !mediaPool.length || failedMedia.size >= mediaPool.length) {
+      rotationRequest = new AbortController()
+      await loadBackgroundIndex(rotationRequest.signal)
+      rotationRequest = null
+    }
+    if (disposed || document.hidden || epoch !== rotationEpoch) return
+    // 所有候选都试过仍失败时停止本轮，下一周期重新读取列表。
+    for (let attempt = 0; attempt < mediaPool.length; attempt++) {
+      const excluded = [...failedMedia, currentBackgroundUrl]
+      let next = rotation?.next(firstRotation ? [...excluded, previousBackground] : excluded)
+      if (!next && firstRotation) next = rotation?.next(excluded)
+      if (!next) { indexReady = false; break }
+      const ready = await backgroundPlayer.value?.show(displayMedia(next), { timeout: 12_000 })
+      if (disposed || document.hidden || epoch !== rotationEpoch) return
+      if (ready) {
+        currentBackgroundUrl = next.url
+        rememberBackground(next.url)
+        firstRotation = false
+        scheduleRotation()
+        return
+      }
+      failedMedia.add(next.url)
+    }
+    scheduleRotation()
+  } catch (error) {
+    if (!disposed && epoch === rotationEpoch) {
+      console.warn('壁纸切换失败，保留当前背景:', error)
+      scheduleRotation()
     }
   }
+}
 
-  if (bgImages.value.length > 0) {
-    const chosen = chooseDifferentRandom(bgImages.value, prev)
-    if (chosen) {
-      bgType.value = 'image'
-      const imagePath = buildPublicAssetPath(chosen.url)
-      const img = new Image()
-      img.onload = () => {
-        currentBg.value = imagePath
-        bgLoaded.value = true
-      }
-      img.onerror = () => {
-        currentBg.value = ''
-        bgLoaded.value = true
-      }
-      img.src = imagePath
-      sessionStorage.setItem(LAST_BG_KEY, chosen.url)
-      return
-    }
-  }
-
-  bgLoaded.value = true
+function handleBackgroundVisibility() {
+  if (startupLoading.value) return
+  rotationEpoch += 1
+  clearTimeout(rotationTimer)
+  rotationTimer = null
+  rotationRequest?.abort()
+  rotationRequest = null
+  backgroundPlayer.value?.setPaused(document.hidden)
+  if (!document.hidden) scheduleRotation(FIRST_ROTATION_DELAY)
 }
 
 onMounted(async () => {
-  await loadBackgroundMedia()
-  pickRandomBg()
+  document.body.classList.add('site-starting')
+  document.addEventListener('visibilitychange', handleBackgroundVisibility)
+  const deadline = new Promise(resolve => {
+    startupTimer = setTimeout(() => {
+      startupExpired = true
+      backgroundRequest.abort()
+      backgroundPlayer.value?.cancelPending()
+      console.warn('页面准备等待超时，将继续进入')
+      resolve()
+    }, STARTUP_TIMEOUT)
+  })
   try {
-    await appStore.fetchStats()
+    appStore.fetchStats().catch(error => console.warn('统计暂时不可用:', error.message))
+    const results = await Promise.race([
+      Promise.allSettled([initializeBackground(), pagesStore.loadPages(), router.isReady()]),
+      deadline
+    ])
+    if (results?.[0]?.status === 'rejected') console.error('背景初始化失败，将在进入后重试:', results[0].reason)
+    if (results?.[2]?.status === 'rejected') console.error('初始页面加载失败:', results[2].reason)
   } catch (error) {
     console.error('应用初始化失败:', error)
   } finally {
-    appStore.isLoading = false
+    clearTimeout(startupTimer)
+    if (!disposed) {
+      startupMessage.value = '准备就绪，正在进入…'
+      startupReady.value = true
+      completionTimer = setTimeout(() => {
+        startupLoading.value = false
+        document.body.classList.remove('site-starting')
+        backgroundPlayer.value?.setPaused(document.hidden)
+        // 首屏退场后才加载其他背景；视频不再挡住进入网站。
+        scheduleRotation(FIRST_ROTATION_DELAY)
+      }, 220)
+    }
   }
 })
+
+onUnmounted(() => {
+  disposed = true
+  rotationEpoch += 1
+  backgroundRequest.abort()
+  rotationRequest?.abort()
+  backgroundPlayer.value?.cancelPending()
+  clearTimeout(startupTimer)
+  clearTimeout(completionTimer)
+  clearTimeout(rotationTimer)
+  document.removeEventListener('visibilitychange', handleBackgroundVisibility)
+  document.body.classList.remove('site-starting')
+})
+
 </script>
 
 <style lang="scss">
@@ -186,7 +280,7 @@ body {
   background-attachment: fixed;
   background-repeat: no-repeat;
   opacity: 0;
-  transition: opacity 1.5s ease;
+  transition: opacity 0.2s ease;
   will-change: opacity;
 
   &.loaded {
@@ -201,7 +295,7 @@ body {
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity 1.5s ease;
+  transition: opacity 0.2s ease;
   will-change: opacity;
 
   &.loaded {
@@ -245,45 +339,25 @@ body {
 }
 
 @media (max-width: 768px) {
+  .page-container { padding-top: 56px; }
+
   .hollow-window {
     margin: 16px auto;
+    max-width: calc(100% - 32px);
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(12px) saturate(160%);
+    -webkit-backdrop-filter: blur(12px) saturate(160%);
     border-radius: 16px;
   }
-}
 
-// ==================== Loading Screen ====================
-.loading-screen {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: #071026;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  z-index: 9999;
-}
-
-.loading-spinner {
-  width: 60px;
-  height: 60px;
-  border: 3px solid rgba(168, 85, 247, 0.2);
-  border-top-color: #a855f7;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.loading-text {
-  margin-top: 20px;
-  color: #e2e8f0;
-  font-size: 16px;
-  letter-spacing: 2px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+  .app-content .glass-card:hover { transform: none; }
+  .app-content .back-to-top-btn {
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    width: 44px;
+    height: 44px;
+    color: #6d28d9;
+  }
 }
 
 // ==================== 路由过渡动画 ====================
@@ -305,12 +379,19 @@ body {
 
 .loading-fade-enter-active,
 .loading-fade-leave-active {
-  transition: opacity 0.5s ease;
+  transition: opacity 0.3s ease;
 }
 
 .loading-fade-enter-from,
 .loading-fade-leave-to {
   opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-fade-enter-active,
+  .loading-fade-leave-active,
+  .bg-image,
+  .bg-video { transition: none; }
 }
 
 // ==================== 毛玻璃镂空卡片 ====================

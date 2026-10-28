@@ -1,3 +1,17 @@
+# 本地依赖、构建产物及敏感配置
+**/node_modules/
+**/dist/
+backend/venv/
+backend/.venv/
+**/__pycache__/
+.env
+src/.env
+backend/.admin-initial-password.txt
+backend/blog.db
+backend/blog.db-*
+.Codex/qa/
+.Codex/local-private/
+
 /node_modules/.bin/esbuild
 /node_modules/.bin/esbuild.cmd
 /node_modules/.bin/esbuild.ps1

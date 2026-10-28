@@ -1,0 +1,148 @@
+/* 首屏静态加载页与 Vue 加载组件共用，避免应用启动时样式跳变。 */
+body.site-starting {
+  overflow: hidden;
+}
+
+.startup-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 32px 24px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: auto;
+  background: #faf8ff;
+  color: #283044;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.startup-loading .startup-loading__content {
+  width: 100%;
+  max-width: 360px;
+}
+
+.startup-loading .startup-loading__brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 32px;
+  color: #5c5272;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.startup-loading .startup-loading__brand-mark {
+  position: relative;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #a855f7, #ec4899);
+}
+
+.startup-loading .startup-loading__brand-mark::before,
+.startup-loading .startup-loading__brand-mark::after {
+  position: absolute;
+  top: 9px;
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+  background: #fff;
+  content: '';
+}
+
+.startup-loading .startup-loading__brand-mark::before {
+  left: 9px;
+  transform: skewY(12deg);
+}
+
+.startup-loading .startup-loading__brand-mark::after {
+  right: 9px;
+  transform: skewY(-12deg);
+}
+
+.startup-loading .startup-loading__title {
+  margin: 0 0 12px;
+  color: #283044;
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.startup-loading .startup-loading__message {
+  margin: 0 0 26px;
+  color: #71677f;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.startup-loading .startup-loading__progress {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eae3f4;
+}
+
+.startup-loading .startup-loading__progress-fill {
+  display: block;
+  width: 28%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #a855f7, #ec4899);
+  animation: startup-loading-sweep 1.45s ease-in-out infinite;
+}
+
+.startup-loading .startup-loading__hint {
+  margin: 14px 0 0;
+  color: #71677f;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.startup-loading.startup-loading--ready .startup-loading__progress-fill {
+  width: 100%;
+  animation: none;
+  transform: none;
+  transition: width 180ms ease-out;
+}
+
+@keyframes startup-loading-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(370%);
+  }
+}
+
+@media (max-width: 480px) {
+  .startup-loading {
+    padding: 24px;
+  }
+
+  .startup-loading .startup-loading__title {
+    font-size: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-loading .startup-loading__progress-fill {
+    width: 40%;
+    animation: none;
+    transform: none;
+  }
+
+  .startup-loading.startup-loading--ready .startup-loading__progress-fill {
+    width: 100%;
+    transition: none;
+  }
+}

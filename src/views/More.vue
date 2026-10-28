@@ -4,13 +4,13 @@
       <section class="more-section">
         <!-- 标题 -->
         <div class="more-header fade-up" style="animation-delay: 0.1s">
-          <h1 class="more-title">了解更多</h1>
-          <p class="more-subtitle text-readable">探索博客背后的故事与技术</p>
+          <h1 class="more-title">{{ pagesStore.text('more', 'title', '了解更多') }}</h1>
+          <p class="more-subtitle text-readable">{{ pagesStore.text('more', 'subtitle', '探索博客背后的故事与技术') }}</p>
         </div>
 
         <!-- 开发日志 Timeline -->
         <div class="timeline-section fade-up" style="animation-delay: 0.2s">
-          <h3 class="section-title text-readable">开发日志</h3>
+          <h3 class="section-title text-readable">{{ pagesStore.text('more', 'logs_title', '开发日志') }}</h3>
           <div class="timeline">
             <div class="timeline-item" v-for="(log, index) in timelineLogs" :key="index">
               <div class="timeline-dot"></div>
@@ -23,9 +23,14 @@
           </div>
         </div>
 
+        <p v-if="cardsLoading" class="content-load-status" role="status">正在加载项目与技术栈…</p>
+        <div v-else-if="cardsError" class="content-load-status" role="status">
+          {{ cardsError }} <button @click="loadCards" type="button">重新加载</button>
+        </div>
+
         <!-- 项目展示区（使用介绍卡片数据） -->
         <div class="projects-section fade-up" style="animation-delay: 0.4s" v-if="!cardsLoading && introCards.length > 0">
-          <h3 class="section-title text-readable">我的项目</h3>
+          <h3 class="section-title text-readable">{{ pagesStore.text('more', 'projects_title', '我的项目') }}</h3>
           <div class="projects-grid">
             <template v-for="card in introCards" :key="card.id">
               <a
@@ -72,66 +77,37 @@
       </section>
     </div>
 
-    <!-- 隐藏的三重点击触发区域（放在 hollow-window 外面避免 overflow:hidden 影响） -->
-    <div
-      class="admin-trigger-zone"
-      @click="handleTripleClick"
-      title="三重点击进入后台管理"
-    ></div>
-
-    <!-- 密码验证弹窗 -->
-    <Teleport to="body">
-      <transition name="dialog-fade">
-        <div v-if="showPasswordDialog" class="dialog-overlay" @click.self="closePasswordDialog">
-          <div class="password-dialog glass-card">
-            <h3 class="dialog-title">管理员验证</h3>
-            <p class="dialog-subtitle">请输入管理员密码</p>
-            <input
-              type="password"
-              v-model="passwordInput"
-              class="password-input"
-              placeholder="请输入密码"
-              @keyup.enter="verifyPassword"
-              ref="passwordInputEl"
-            />
-            <div class="dialog-actions">
-              <button class="btn btn-ghost" @click="closePasswordDialog">取消</button>
-              <button class="btn btn-primary" @click="verifyPassword">确认</button>
-            </div>
-          </div>
-        </div>
-      </transition>
-    </Teleport>
+    <!-- 保留隐藏的三连击入口，不显示公开的后台链接。 -->
+    <div class="admin-trigger-zone" @click="handleTripleClick" title="三重点击进入后台管理"></div>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted } from 'vue';
+import { usePagesStore } from '@/stores/pages';
+const pagesStore = usePagesStore();
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import request from '@/utils/request';
 
 const router = useRouter();
-
-// 三重点击计数器
 const clickCount = ref(0);
 let clickTimer = null;
-const showPasswordDialog = ref(false);
-const passwordInput = ref('');
-const passwordInputEl = ref(null);
-const CORRECT_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || '';
 
 // 卡片数据
 const introCards = ref([]);
 const skillCards = ref([]);
 const cardsLoading = ref(false);
+const cardsError = ref('');
 
 async function loadCards() {
   cardsLoading.value = true;
+  cardsError.value = '';
   try {
     const data = await request.get('/api/cards');
     introCards.value = data?.intro_cards || [];
     skillCards.value = data?.skill_cards || [];
   } catch (err) {
+    cardsError.value = '项目资料暂时加载失败';
     console.error('加载卡片失败:', err);
   } finally {
     cardsLoading.value = false;
@@ -141,31 +117,10 @@ async function loadCards() {
 function handleTripleClick() {
   clickCount.value++;
   if (clickTimer) clearTimeout(clickTimer);
-  clickTimer = setTimeout(() => {
-    clickCount.value = 0;
-  }, 600);
-
+  clickTimer = setTimeout(() => { clickCount.value = 0; }, 600);
   if (clickCount.value >= 3) {
     clickCount.value = 0;
-    showPasswordDialog.value = true;
-    nextTick(() => {
-      passwordInputEl.value?.focus();
-    });
-  }
-}
-
-function closePasswordDialog() {
-  showPasswordDialog.value = false;
-  passwordInput.value = '';
-}
-
-function verifyPassword() {
-  if (passwordInput.value === CORRECT_PASSWORD) {
-    closePasswordDialog();
     router.push('/admin');
-  } else {
-    passwordInput.value = '';
-    alert('密码错误');
   }
 }
 
@@ -173,34 +128,41 @@ onMounted(() => {
   loadCards();
 });
 
-const timelineLogs = [
+const defaultTimelineLogs = [
   {
-    date: '2026 年 4 月（本周）',
-    title: '🛠 文章页重构为词云导航',
-    desc: '文章列表改为 3D 词云入口，点击词云标题直接跳转文章详情；移除了词云内嵌小卡片并完成居中点击优化。'
+    date: '2026 年 10 月 4 日',
+    title: '🗂 文章与文档统一管理',
+    desc: '后台将文章和文档集中在一个入口，保留新建文章、草稿与发布，也能直接拖入文档上传和管理。'
   },
   {
-    date: '2026 年 4 月',
-    title: '🧾 Markdown 渲染层级修复',
-    desc: '详情页 Markdown 解析升级，支持 # ~ ###### 标题层级、目录同步与列表/引用/代码块结构化渲染。'
+    date: '2026 年 10 月 4 日',
+    title: '🖼 拖拽上传文章封面',
+    desc: '写文章时可以拖入或选择封面图片，上传后直接预览，无需手动填写图片地址。'
   },
   {
-    date: '2026 年 4 月',
-    title: '🎵 音乐播放器切歌修复',
-    desc: '修复“无法切换歌曲”问题，播放列表扩展为多首并改为顺序循环切换，上一首/下一首行为更符合直觉。'
+    date: '2026 年 10 月 4 日',
+    title: '📖 更专注的文章阅读',
+    desc: '电脑端固定标题、大纲与正文区域，阅读时只滚动内容；手机上的 PDF 可以直接在网站内阅读和翻页。'
   },
   {
-    date: '2026 年 3 月',
-    title: '📱 响应式与交互细节优化',
-    desc: '完善移动端触控和布局，优化导航、卡片动效与页面加载反馈，提升整体浏览流畅度。'
+    date: '2026 年 10 月 4 日',
+    title: '📱 手机布局与加载优化',
+    desc: '调整手机导航与页面比例，改用透明玻璃效果；压缩首屏资源并缓存常用资源，减少重复加载的等待。'
   },
   {
-    date: '2026 年 1 月',
-    title: '🚀 项目初始化',
-    desc: '基于 Vue 3 + Vite + Flask 搭建前后端分离架构，完成文章接口、详情渲染和基础页面框架。'
+    date: '2026 年 10 月 4 日',
+    title: '🎵 音乐信息与封面补全',
+    desc: '音乐盒读取歌曲文件中的歌名、歌手和内嵌封面，保留上一首与下一首，并显示加载与播放状态。'
+  },
+  {
+    date: '2026 年 10 月 3 日',
+    title: '✍️ 内容后台与网站上线',
+    desc: '加入文章草稿与发布、页面文案、个人介绍和媒体管理；博客上线，朋友可以通过安全连接访问。'
   }
 ];
 
+const timelineLogs = computed(() => pagesStore.pages.more?.timeline ?? defaultTimelineLogs);
+onUnmounted(() => { if (clickTimer) clearTimeout(clickTimer); });
 </script>
 
 <style scoped lang="scss">
@@ -234,7 +196,11 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 .more-subtitle {
   color: rgba(0, 0, 0, 0.55);
   font-size: 1.1rem;
+  line-height: 1.7;
 }
+
+.content-load-status { color: #666; font-size: 14px; margin: 20px 0; }
+.content-load-status button { color: #7c3aed; border: 0; background: #f1e7ff; padding: 8px 12px; border-radius: 8px; min-height: 44px; cursor: pointer; }
 
 .section-title {
   font-size: 1.35rem;
@@ -484,13 +450,30 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 @media (max-width: 640px) {
-  .more-section { padding: 0 1rem; }
-  .tech-categories { grid-template-columns: 1fr; }
-  .timeline { padding-left: 24px; }
-  .timeline-dot { left: -24px; }
+  .more-page { padding-top: 0; padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); min-height: calc(100svh - 56px); }
+  .more-section { padding: 24px 16px; }
+  .more-header { margin-bottom: 28px; }
+  .more-title { font-size: 28px; line-height: 1.3; margin-bottom: 8px; }
+  .more-subtitle { font-size: 14px; }
+  .section-title { font-size: 20px; margin-bottom: 20px; }
+  .timeline-section { margin-bottom: 28px; }
+  .timeline { padding-left: 18px; }
+  .timeline::before { left: 3px; }
+  .timeline-dot { left: -20px; width: 12px; height: 12px; top: 12px; border-width: 2px; }
+  .timeline-item { margin-bottom: 16px; }
+  .timeline-card { padding: 16px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04); border-radius: 12px; }
+  .timeline-date { font-size: 12px; line-height: 1.5; letter-spacing: 0; }
+  .timeline-title { font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+  .timeline-desc { font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+  .tech-categories, .projects-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .project-card, .tech-category { padding: 16px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); }
+  .project-name, .category-name { font-size: 16px; line-height: 1.5; }
+  .project-desc, .tech-tag { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+  .project-arrow { opacity: 1; transform: none; }
+  .projects-section, .tech-stack-section { margin-bottom: 28px; }
+  .admin-trigger-zone { top: 64px; width: 36px; height: 36px; }
 }
 
-// ===== 隐藏触发区域（不影响样式）- 固定在页面左上角 =====
 .admin-trigger-zone {
   position: fixed;
   top: 84px;
@@ -503,10 +486,7 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 @media (max-width: 768px) {
-  .admin-trigger-zone {
-    left: 16px;
-    top: 84px;
-  }
+  .admin-trigger-zone { left: 16px; top: 84px; }
 }
 
 // ===== 密码弹窗样式 =====

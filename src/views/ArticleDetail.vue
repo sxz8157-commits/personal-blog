@@ -1,18 +1,31 @@
 <template>
-  <div class="article-detail-page">
+  <div class="article-detail-page" :class="{ 'no-toc': !hasTocSidebar }">
+    <p v-if="articleError" role="alert" class="glass-card article-error">{{ articleError }}</p>
+
+
+    <!-- 文章内容区域 -->
+    <div class="article-layout" :class="{ 'no-toc': !hasTocSidebar }" v-if="article">
+      <aside class="article-navigation">
     <!-- 文章头部 -->
     <header class="article-header" v-if="article">
       <div class="article-header-inner">
-        <h1 class="article-title">{{ article.title }}</h1>
-        <div class="article-meta">
-          <span class="meta-item">
+        <router-link to="/articles" class="article-back-link">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M19 12H5m7-7-7 7 7 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          返回文章页
+        </router-link>
+        <h1 class="article-title" :title="article.title">{{ article.title }}</h1>
+        <button v-if="hasTocSidebar" type="button" class="mobile-toc-toggle" :aria-expanded="mobileTocOpen" aria-controls="article-toc" @click="mobileTocOpen = !mobileTocOpen">{{ mobileTocOpen ? '收起大纲' : '查看大纲' }}</button>
+        <div v-if="article.created_at || article.category?.name" class="article-meta">
+          <span v-if="article.created_at" class="meta-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/>
               <path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
             {{ formatDate(article.created_at) }}
           </span>
-          <span class="meta-item">
+          <span v-if="article.category?.name" class="meta-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
               <line x1="7" y1="7" x2="7.01" y2="7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -22,17 +35,9 @@
         </div>
       </div>
     </header>
-
-    <!-- 封面 -->
-    <div class="article-cover-wrapper" v-if="article && article.cover_image">
-      <img :src="article.cover_image" :alt="article.title" class="article-cover" />
-    </div>
-
-    <!-- 文章内容区域 -->
-    <div class="article-layout" :class="{ 'no-toc': !hasTocSidebar }" v-if="article">
       <!-- 左侧大纲 -->
-      <div v-if="hasTocSidebar" class="article-toc-sidebar">
-        <div class="toc-sticky glass-card">
+      <div v-if="hasTocSidebar" class="article-toc-sidebar" :class="{ 'mobile-toc-open': mobileTocOpen }">
+        <div id="article-toc" class="toc-sticky glass-card">
           <h3 class="toc-title">大纲</h3>
           <div class="toc-list">
             <template v-if="fileType === 'md' && headings.length > 0">
@@ -72,9 +77,7 @@
                   </a>
                 </div>
               </template>
-              <div class="toc-item toc-level-1">
-                <a :href="fileUrl" target="_blank" rel="noopener noreferrer">新窗口打开 PDF</a>
-              </div>
+
             </template>
             <template v-else-if="fileType === 'xlsx'">
               <div v-if="xlsxLoading" class="toc-empty">正在读取 XLSX 工作表...</div>
@@ -100,16 +103,24 @@
         </div>
       </div>
 
+      </aside>
+
       <!-- 文章内容 -->
       <article class="article-content-section">
-        <div class="article-content glass-card">
-          <div v-if="fileType === 'md'" class="content-body" v-html="renderedContent"></div>
+        <div ref="articleScrollEl" class="article-content glass-card">
+    <!-- 封面 -->
+    <div class="article-cover-wrapper" v-if="article && article.cover_image">
+      <img :src="article.cover_image" :alt="article.title" class="article-cover" />
+    </div>
+          <PdfViewer v-if="fileType === 'pdf'" :src="fileUrl" v-model:page="pdfCurrentPage" @outline-change="handlePdfOutline" @page-change="resetArticleScroll" />
+          <div v-else-if="fileType === 'md'" class="content-body" v-html="renderedContent"></div>
+          <pre v-else-if="fileType === 'txt'" class="content-body">{{ content }}</pre>
           <div v-else-if="fileType === 'xmind'" class="content-body file-content xmind-content">
             <h3 class="file-title">{{ article?.title || 'XMind 预览' }}</h3>
             <p class="file-meta">当前格式：XMIND（站内解析预览）</p>
             <div
               class="xmind-panel"
-              @wheel.prevent="onXmindWheel"
+              @wheel="onXmindWheel"
               @mousedown="onXmindMouseDown"
               @mousemove="onXmindMouseMove"
               @mouseup="onXmindMouseUp"
@@ -172,13 +183,7 @@
           <div v-else class="content-body file-content">
             <h3 class="file-title">{{ article?.title || '文档预览' }}</h3>
             <p class="file-meta">当前格式：{{ fileType.toUpperCase() }}</p>
-            <iframe
-              v-if="canInlinePreview"
-              class="pdf-preview"
-              :src="pdfPreviewUrl"
-              title="PDF 预览"
-            />
-            <p v-else class="file-tip">当前格式暂不支持站内解析预览，请点击下方按钮打开。</p>
+            <p class="file-tip">当前格式暂不支持站内解析预览，请点击下方按钮打开。</p>
             <a class="file-open-btn" :href="fileUrl" target="_blank" rel="noopener noreferrer">打开文档</a>
           </div>
         </div>
@@ -186,7 +191,7 @@
     </div>
 
     <!-- 加载 -->
-    <div v-if="loading" class="loading-state">
+    <div v-if="loading && !article" class="loading-state">
       <div class="loading-dots"><span></span><span></span><span></span></div>
       <p>加载中...</p>
     </div>
@@ -206,18 +211,11 @@
 </template>
 
 <script setup>
+import { sanitizeHtml } from '@/utils/safeHtml'
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import request from '@/utils/request'
-import JSZip from 'jszip'
-import * as pdfjsLib from 'pdfjs-dist'
-import mammoth from 'mammoth'
-import * as XLSX from 'xlsx'
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString()
+import PdfViewer from '@/components/PdfViewer.vue'
 
 // ================== 【新增】路径生成函数 START ==================
 // 简单的根路径生成函数，确保生成 /wenz/文件名 格式
@@ -239,6 +237,7 @@ const route = useRoute()
 const article = ref(null)
 const content = ref('')
 const loading = ref(false)
+const articleError = ref('')
 const headings = ref([])
 const fileType = ref('md')
 const fileUrl = ref('')
@@ -265,6 +264,8 @@ const xlsxSheets = ref([])
 const xlsxActiveSheet = ref('')
 const xlsxTable = ref([])
 const xlsxSheetData = ref({})
+const articleScrollEl = ref(null)
+const mobileTocOpen = ref(false)
 
 function formatDate(dateStr) {
   if (!dateStr) return ''
@@ -477,15 +478,9 @@ const renderedContent = computed(() => {
   if (!content.value) return ''
 
   headings.value = processHeadings(content.value)
-  return renderMarkdownContent(content.value)
+  return sanitizeHtml(renderMarkdownContent(content.value))
 })
 
-const canInlinePreview = computed(() => fileType.value === 'pdf' && !!fileUrl.value)
-const pdfPreviewUrl = computed(() => {
-  if (!canInlinePreview.value) return ''
-  const sep = fileUrl.value.includes('#') ? '&' : '#'
-  return `${fileUrl.value}${sep}page=${pdfCurrentPage.value}`
-})
 const hasTocSidebar = computed(() => {
   if (fileType.value === 'md') return headings.value.length > 0
   if (fileType.value === 'pdf') return true
@@ -544,6 +539,12 @@ function flattenXmindTopic(topic, depth = 0, out = [], maxNodes = 1500) {
   return out
 }
 
+async function fetchDocumentBuffer(url) {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`文件请求失败（${res.status}）`)
+  return res.arrayBuffer()
+}
+
 async function loadXmindPreview(url) {
   resetXmindPreview()
   if (!url) {
@@ -553,9 +554,11 @@ async function loadXmindPreview(url) {
 
   xmindLoading.value = true
   try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`文件请求失败（${res.status}）`)
-    const buf = await res.arrayBuffer()
+    // 仅进入对应格式时加载解析库，同时下载文档，普通文章无需等待这些库。
+    const [buf, { default: JSZip }] = await Promise.all([
+      fetchDocumentBuffer(url),
+      import('jszip')
+    ])
     const zip = await JSZip.loadAsync(buf)
     const thumbnailFile = Object.values(zip.files).find((f) => /(?:^|\/)thumbnails\/thumbnail\.(png|jpg|jpeg|webp)$/i.test(f.name))
       || Object.values(zip.files).find((f) => /(?:^|\/)thumbnail\.(png|jpg|jpeg|webp)$/i.test(f.name))
@@ -635,9 +638,10 @@ async function loadDocxPreview(url) {
   }
   docxLoading.value = true
   try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`文件请求失败（${res.status}）`)
-    const arrayBuffer = await res.arrayBuffer()
+    const [arrayBuffer, { default: mammoth }] = await Promise.all([
+      fetchDocumentBuffer(url),
+      import('mammoth')
+    ])
     const result = await mammoth.convertToHtml(
       { arrayBuffer },
       {
@@ -663,7 +667,7 @@ async function loadDocxPreview(url) {
       return
     }
 
-    docxHtml.value = rawHtml
+    docxHtml.value = sanitizeHtml(rawHtml)
   } catch (err) {
     docxError.value = err?.message || 'DOCX 预览解析失败'
   } finally {
@@ -675,6 +679,8 @@ function setXlsxActiveSheet(name) {
   if (!name) return
   xlsxActiveSheet.value = name
   xlsxTable.value = xlsxSheetData.value[name] || []
+  resetArticleScroll()
+  mobileTocOpen.value = false
 }
 
 async function loadXlsxPreview(url) {
@@ -685,9 +691,10 @@ async function loadXlsxPreview(url) {
   }
   xlsxLoading.value = true
   try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`文件请求失败（${res.status}）`)
-    const arrayBuffer = await res.arrayBuffer()
+    const [arrayBuffer, XLSX] = await Promise.all([
+      fetchDocumentBuffer(url),
+      import('xlsx')
+    ])
     const wb = XLSX.read(arrayBuffer, { type: 'array' })
     const names = Array.isArray(wb?.SheetNames) ? wb.SheetNames : []
     if (!names.length) {
@@ -713,85 +720,36 @@ async function loadXlsxPreview(url) {
   }
 }
 
-async function resolvePdfDestPage(pdfDoc, dest) {
-  let target = dest
-  if (typeof dest === 'string') {
-    target = await pdfDoc.getDestination(dest)
-  }
-  if (!Array.isArray(target) || !target[0]) return null
-  const pageIndex = await pdfDoc.getPageIndex(target[0])
-  return pageIndex + 1
+function handlePdfOutline(state) {
+  pdfOutlineLoading.value = state.loading
+  pdfOutlineError.value = state.error || ''
+  pdfOutline.value = state.items || []
 }
 
-async function flattenPdfOutline(items, pdfDoc, level = 1, out = [], maxNodes = 1200) {
-  if (!Array.isArray(items) || out.length >= maxNodes) return out
-  for (const item of items) {
-    if (!item || out.length >= maxNodes) break
-    let page = null
-    try {
-      if (item.dest) page = await resolvePdfDestPage(pdfDoc, item.dest)
-    } catch {
-      page = null
-    }
-    out.push({
-      id: `${out.length}-${level}`,
-      title: String(item.title || '').trim() || '(未命名标题)',
-      level,
-      page
-    })
-    if (Array.isArray(item.items) && item.items.length) {
-      await flattenPdfOutline(item.items, pdfDoc, Math.min(level + 1, 6), out, maxNodes)
-    }
-  }
-  return out
+function resetArticleScroll() {
+  if (articleScrollEl.value) articleScrollEl.value.scrollTop = 0
 }
 
-async function loadPdfOutline(url) {
-  resetPdfOutline()
-  if (!url) {
-    pdfOutlineError.value = '未找到 PDF 地址'
-    return
-  }
-  pdfOutlineLoading.value = true
-  try {
-    const task = pdfjsLib.getDocument({ url })
-    const pdfDoc = await task.promise
-    const outline = await pdfDoc.getOutline()
-    if (!outline || !outline.length) {
-      pdfOutlineError.value = '该 PDF 未包含大纲书签'
-      return
-    }
-    pdfOutline.value = await flattenPdfOutline(outline, pdfDoc)
-    if (!pdfOutline.value.length) {
-      pdfOutlineError.value = '该 PDF 未包含可解析的大纲'
-    }
-  } catch (err) {
-    pdfOutlineError.value = err?.message || 'PDF 大纲解析失败'
-  } finally {
-    pdfOutlineLoading.value = false
-  }
-}
-
-// 滚动到指定标题
+// 大纲只滚动正文卡片，标题、返回和左侧导航保持在原处。
 const scrollToHeading = (id) => {
-  const element = document.getElementById(id)
-  if (element) {
-    const offset = 100
-    const elementPosition = element.getBoundingClientRect().top + window.pageYOffset
-    window.scrollTo({
-      top: elementPosition - offset,
-      behavior: 'smooth'
-    })
-  }
+  const pane = articleScrollEl.value
+  const element = pane?.querySelector('#' + id)
+  if (!element) return
+  pane.scrollTo({ top: pane.scrollTop + element.getBoundingClientRect().top - pane.getBoundingClientRect().top - 24, behavior: 'smooth' })
+  mobileTocOpen.value = false
 }
 
 const scrollToTop = () => {
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  if (fileType.value === 'pdf') pdfCurrentPage.value = 1
+  resetArticleScroll()
+  mobileTocOpen.value = false
 }
 
 const jumpToPdfPage = (page) => {
   if (!page || page < 1) return
   pdfCurrentPage.value = page
+  resetArticleScroll()
+  mobileTocOpen.value = false
 }
 
 const onXmindWheel = (e) => {
@@ -828,11 +786,15 @@ const resetXmindView = () => {
 
 const fetchArticle = async () => {
   loading.value = true
+  articleError.value = ''
+  article.value = null
   try {
-    const articleId = decodeURIComponent(String(route.params.id || ''))
+    const articleId = String(route.params.id || '')
+    const databaseId = /^db-(\d+)$/.exec(articleId)?.[1]
 
     // 先尝试从 MD 文件获取
     try {
+      if (databaseId) throw { status:404 }
       const mdData = await request.get(`/api/md-articles/${encodeURIComponent(articleId)}`)
       article.value = {
         id: articleId,
@@ -845,14 +807,7 @@ const fetchArticle = async () => {
       content.value = mdData.content || ''
       fileType.value = mdData.file_type || 'md'
 
-      // ================== 【核心修改】fileUrl 赋值 START ==================
-      // 确保生成 /wenz/文件名 的根路径
-      if (mdData.filename) {
-        fileUrl.value = buildPublicAssetPath(`wenz/${mdData.filename}`)
-      } else {
-        fileUrl.value = ''
-      }
-      // ================== 【核心修改】fileUrl 赋值 END ====================
+      fileUrl.value = mdData.file_url || ''
 
       if (fileType.value === 'xmind') {
         await loadXmindPreview(fileUrl.value)
@@ -861,7 +816,7 @@ const fetchArticle = async () => {
         resetXlsxPreview()
       } else if (fileType.value === 'pdf') {
         resetXmindPreview()
-        await loadPdfOutline(fileUrl.value)
+        resetPdfOutline()
         resetDocxPreview()
         resetXlsxPreview()
       } else if (fileType.value === 'docx') {
@@ -881,13 +836,14 @@ const fetchArticle = async () => {
         resetXlsxPreview()
       }
       return
-    } catch {
-      // MD 未命中时回退到数据库文章
+    } catch (err) {
+      if (err.status !== 404) throw err;
+      // 仅文档确实不存在时，兼容旧数据库文章 URL。
     }
 
     // 如果 MD 文件没有，尝试从数据库获取
     try {
-      const data = await request.get(`/api/articles/${articleId}`)
+      const data = await request.get(`/api/articles/${databaseId || articleId}`)
       article.value = data.article
       content.value = data.content || ''
       fileType.value = 'md'
@@ -897,10 +853,10 @@ const fetchArticle = async () => {
       resetDocxPreview()
       resetXlsxPreview()
     } catch (dbError) {
-      console.error('文章不存在:', dbError.message)
+      articleError.value = dbError.message
     }
   } catch (error) {
-    console.error('获取文章详情失败:', error)
+    articleError.value = error.message
   } finally {
     loading.value = false
   }
@@ -913,195 +869,89 @@ onMounted(() => { fetchArticle() })
 $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 
 .article-detail-page {
-  padding-top: 16px;
-  padding-bottom: 80px;
-  min-height: 100vh;
+  --article-nav-height: 68px;
+  height: calc(100vh - var(--article-nav-height));
+  height: calc(100dvh - var(--article-nav-height));
   width: 100%;
-}
-
-.article-header {
-  padding: 32px 2rem 24px;
-  max-width: 900px;
+  max-width: 1400px;
+  min-height: 0;
   margin: 0 auto;
+  padding: 16px 32px calc(20px + env(safe-area-inset-bottom, 0px));
+  overflow: hidden;
 }
 
-.article-header-inner {
-  max-width: 800px;
-}
-
-.article-title {
-  font-size: clamp(1.5rem, 4vw, 2.5rem);
-  font-weight: 800;
-  color: #1a1a1a;
-  line-height: 1.3;
-  margin-bottom: 16px;
-}
-
-.article-meta {
-  display: flex;
-  gap: 20px;
-  flex-wrap: wrap;
-}
-
-.meta-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: rgba(0, 0, 0, 0.45);
-  font-size: 0.85rem;
-}
-
-.article-cover-wrapper {
-  padding: 0 2rem;
-  max-width: 900px;
-  margin: 0 auto 32px;
-
-  .article-cover {
-    width: 100%;
-    max-height: 400px;
-    object-fit: cover;
-    border-radius: 16px;
-  }
-}
-
-// 主布局：左侧大纲 + 右侧内容
 .article-layout {
-  display: grid !important;
-  grid-template-columns: 280px 1fr !important;
-  gap: 40px !important;
-  max-width: 1400px !important;
-  margin: 0 auto !important;
-  padding: 0 2rem !important;
-  width: 100% !important;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 24px;
+  height: 100%;
+  min-height: 0;
 }
 
-.article-layout.no-toc {
-  grid-template-columns: 1fr !important;
-  max-width: 1320px !important;
+.article-navigation { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 16px; }
+.article-header { flex: 0 0 auto; padding: 0; margin: 0; background: transparent; border: 0; }
+.article-header-inner { width: 100%; }
+.article-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 14px;
+  border: 1px solid rgba(124, 58, 237, 0.25);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(10px);
+  color: #6d28d9;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  &:hover { background: rgba(237, 233, 254, 0.35); }
+  &:focus-visible { outline: 2px solid #7c3aed; outline-offset: 3px; }
 }
+.article-title { font-size: 2.25rem; font-weight: 800; color: #1a1a1a; line-height: 1.3; overflow-wrap: anywhere; margin: 0 0 12px; }
+.article-meta { display: flex; gap: 12px; flex-wrap: wrap; }
+.meta-item { display: flex; align-items: center; gap: 6px; color: rgba(0, 0, 0, 0.65); font-size: 0.8rem; }
+.mobile-toc-toggle { display: none; }
 
-// 左侧大纲
-.article-toc-sidebar {
-  grid-column: 1 !important;
-  grid-row: 1 !important;
-
-  @media (max-width: 1024px) {
-    display: none !important;
-  }
-
-  .toc-sticky {
-    position: sticky !important;
-    top: 100px !important;
-    max-height: calc(100vh - 120px) !important;
-    overflow-y: auto !important;
-    padding: 24px !important;
-    background: rgba(255, 255, 255, 0.65) !important;
-    backdrop-filter: blur(20px) saturate(180%) !important;
-    -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
-    border-radius: 16px !important;
-    border: 1px solid rgba(255, 255, 255, 0.3) !important;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1),
-                inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
-  }
-
-  .toc-title {
-    font-size: 1.1rem !important;
-    font-weight: 700 !important;
-    color: #1a1a1a !important;
-    margin: 0 0 20px 0 !important;
-    padding: 0 0 12px 0 !important;
-    border-bottom: 2px solid rgba(168, 85, 247, 0.2) !important;
-    text-align: center !important;
-  }
-
-  .toc-list {
-    display: flex !important;
-    flex-direction: column !important;
-    gap: 4px !important;
-    width: 100% !important;
-  }
-
-  .toc-item {
-    width: 100% !important;
-
-    a {
-      display: block !important;
-      width: 100% !important;
-      padding: 6px 12px !important;
-      color: rgba(0, 0, 0, 0.65) !important;
-      text-decoration: none !important;
-      font-size: 0.85rem !important;
-      line-height: 1.5 !important;
-      border-radius: 6px !important;
-      transition: all 0.2s ease !important;
-      border-left: 3px solid transparent !important;
-      word-break: break-word !important;
-      white-space: normal !important;
-      text-align: left !important;
-
-      &:hover {
-        background: rgba(168, 85, 247, 0.08) !important;
-        color: #7c3aed !important;
-      }
-
-      &.active {
-        background: rgba(168, 85, 247, 0.12) !important;
-        color: #7c3aed !important;
-        font-weight: 600 !important;
-        border-left-color: #a855f7 !important;
-      }
-    }
-  }
-
-  // 层级缩进
-  .toc-level-1 a {
-    padding-left: 12px !important;
-    font-weight: 600 !important;
-    font-size: 0.9rem !important;
-    color: rgba(0, 0, 0, 0.8) !important;
-  }
-
-  .toc-level-2 a {
-    padding-left: 24px !important;
-    font-size: 0.85rem !important;
-  }
-
-  .toc-level-3 a {
-    padding-left: 36px !important;
-    font-size: 0.8rem !important;
-    color: rgba(0, 0, 0, 0.55) !important;
-  }
-
-  .toc-level-4 a,
-  .toc-level-5 a,
-  .toc-level-6 a {
-    padding-left: 44px !important;
-    font-size: 0.78rem !important;
-    color: rgba(0, 0, 0, 0.5) !important;
-  }
-
-  .toc-empty {
-    color: rgba(0, 0, 0, 0.4) !important;
-    font-size: 0.9rem !important;
-    text-align: center !important;
-    padding: 40px 0 !important;
-  }
+.article-toc-sidebar { flex: 1 1 0; min-height: 0; min-width: 0; }
+.toc-sticky.glass-card {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  transform: none;
+  will-change: auto;
 }
+.toc-title { font-size: 1rem; font-weight: 700; color: #1a1a1a; margin: 0 0 12px; padding: 0 0 10px; border-bottom: 1px solid rgba(168, 85, 247, 0.2); }
+.toc-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.toc-item a { display: block; padding: 6px 10px; color: rgba(0, 0, 0, 0.8); text-decoration: none; font-size: 0.85rem; line-height: 1.5; border-radius: 6px; border-left: 3px solid transparent; overflow-wrap: anywhere; }
+.toc-item a:hover, .toc-item a.active { color: #6d28d9; background: rgba(168, 85, 247, 0.14); border-left-color: #a855f7; }
+.toc-level-1 a { font-weight: 600; }
+.toc-level-2 a { padding-left: 18px; }
+.toc-level-3 a { padding-left: 26px; }
+.toc-level-4 a, .toc-level-5 a, .toc-level-6 a { padding-left: 34px; }
+.toc-empty { padding: 12px 0; color: rgba(0, 0, 0, 0.7); font-size: 0.85rem; }
 
-// 文章内容
-.article-content-section {
-  grid-column: 2 !important;
-  grid-row: 1 !important;
-  min-width: 0 !important;
+.article-content-section { min-height: 0; min-width: 0; height: 100%; }
+.article-content.glass-card {
+  height: 100%;
+  padding: 24px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  // 超长正文不能从中心缩放，否则会盖住标题和返回入口。
+  &, &:hover { transform: none; will-change: auto; }
 }
-
-.article-layout.no-toc .article-content-section {
-  grid-column: 1 !important;
-}
-
-.article-content {
-  padding: 32px;
-}
+.article-cover-wrapper { margin: 0 0 24px; padding: 0; }
+.article-cover { display: block; width: 100%; max-height: 240px; object-fit: cover; border-radius: 12px; }
 
 .content-body {
   max-width: 760px;
@@ -1209,14 +1059,7 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   color: rgba(0, 0, 0, 0.55);
 }
 
-.pdf-preview {
-  width: 100%;
-  min-height: 82vh;
-  height: calc(100vh - 220px);
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.45);
-}
+
 
 .file-tip {
   margin-bottom: 14px;
@@ -1243,8 +1086,8 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   margin-top: 12px;
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.55);
-  max-height: calc(100vh - 260px);
+  background: rgba(255, 255, 255, 0.12);
+  max-height: none;
   overflow: auto;
   cursor: grab;
   user-select: none;
@@ -1291,8 +1134,8 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   margin-top: 12px;
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.55);
-  max-height: calc(100vh - 260px);
+  background: rgba(255, 255, 255, 0.12);
+  max-height: none;
   overflow: auto;
   padding: 20px 24px;
 }
@@ -1322,8 +1165,8 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   margin-top: 12px;
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.55);
-  max-height: calc(100vh - 260px);
+  background: rgba(255, 255, 255, 0.12);
+  max-height: none;
   overflow: auto;
   padding: 12px;
 }
@@ -1429,11 +1272,26 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   }
 }
 
-@media (max-width: 640px) {
-  .article-header { padding: 24px 1rem 16px; }
-  .article-cover-wrapper { padding: 0 1rem; }
-  .article-layout { padding: 0 1rem; }
-  .article-content-section { padding: 0; }
-  .article-content { padding: 20px; }
+@media (max-width: 1024px) and (min-width: 769px) {
+  .article-layout { grid-template-columns: 240px minmax(0, 1fr); gap: 16px; }
+  .article-detail-page { padding-left: 20px; padding-right: 20px; }
+}
+
+@media (max-width: 768px) {
+  .article-detail-page { --article-nav-height: 56px; padding: 12px 16px calc(20px + env(safe-area-inset-bottom, 0px)); }
+  .article-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+  .article-navigation { display: block; }
+  .article-header-inner { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+  .article-back-link { margin: 0; min-height: 40px; padding: 6px 9px; font-size: 0.8rem; white-space: nowrap; }
+  .article-back-link svg { width: 16px; height: 16px; }
+  .article-title { font-size: 1.25rem; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .article-meta { grid-column: 1 / -1; }
+  .mobile-toc-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 6px 8px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; color: #6d28d9; background: rgba(255, 255, 255, 0.18); font-size: 0.78rem; white-space: nowrap; }
+  .article-toc-sidebar { display: none; margin-top: 10px; max-height: 28vh; max-height: 28dvh; }
+  .article-toc-sidebar.mobile-toc-open { display: block; }
+  .toc-sticky.glass-card { height: auto; max-height: 28vh; max-height: 28dvh; padding: 12px; }
+  .article-content.glass-card { padding: 16px; }
+  .docx-panel { padding: 12px; }
+  .content-body { font-size: 0.95rem; }
 }
 </style>

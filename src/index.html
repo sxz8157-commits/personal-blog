@@ -2,15 +2,25 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/toux/img.png" />
+    <!-- favicon.png 来自 backend/public/toux/img.png 的 32×32 缩略图，仅用于浏览器图标；原头像保持不变。 -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon.png?no-inline" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preload" as="image" href="/assets/startup-background.webp" fetchpriority="low" />
+    <link rel="stylesheet" href="/styles/startup-loading.css" />
     <title>沛心的个人博客</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="icon" type="image/png" href="/toux/img.png" />
   </head>
-  <body>
+  <body class="site-starting">
+    <!-- 脚本下载期间也显示同一加载页，Vue 挂载完成后交接。 -->
+    <div id="boot-loading" class="startup-loading" role="status" aria-live="polite">
+      <div class="startup-loading__content">
+        <div class="startup-loading__brand"><span class="startup-loading__brand-mark" aria-hidden="true"></span><span>沛心的博客</span></div>
+        <h1 class="startup-loading__title">正在准备页面</h1>
+        <p class="startup-loading__message">正在加载背景与页面内容…</p>
+        <div class="startup-loading__progress" role="progressbar" aria-label="页面加载" aria-valuetext="正在加载背景与页面内容"><span class="startup-loading__progress-fill"></span></div>
+        <p class="startup-loading__hint">准备就绪后将自动进入</p>
+        <noscript><p class="startup-loading__hint">请启用 JavaScript 后重新打开页面。</p></noscript>
+      </div>
+    </div>
     <div id="app"></div>
     <script type="module" src="/main.js"></script>
   </body>

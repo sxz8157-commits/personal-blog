@@ -3,10 +3,10 @@
     <!-- Hero 区域 -->
     <main class="hero-section">
       <section class="hero-content">
-        <h1 class="hero-title fade-up" style="animation-delay: 0.1s">
-          <span class="gradient-text">{{ displayText }}</span><span class="type-cursor" aria-hidden="true">|</span>
+        <h1 class="hero-title fade-up" style="animation-delay: 0.1s" :aria-label="typedText">
+          <span class="gradient-text" aria-hidden="true">{{ displayText }}</span><span class="type-cursor" aria-hidden="true"></span>
         </h1>
-        <p class="hero-sub fade-up" style="animation-delay: 0.2s">从设计到代码，记录我的探索与赛博微光灵感。</p>
+        <p class="hero-sub fade-up" style="animation-delay: 0.2s">{{ pagesStore.text('home', 'subtitle', '从设计到代码，记录我的探索与赛博微光灵感。') }}</p>
 
         <div class="hero-cta fade-up" style="animation-delay: 0.3s">
           <button class="btn btn-primary" @click="goArticles">
@@ -14,9 +14,9 @@
               <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            阅读文章
+            {{ pagesStore.text('home', 'articles_button', '阅读文章') }}
           </button>
-          <router-link to="/about" class="btn btn-ghost">了解更多</router-link>
+          <router-link to="/about" class="btn btn-ghost">{{ pagesStore.text('home', 'about_button', '了解更多') }}</router-link>
         </div>
       </section>
 
@@ -27,38 +27,18 @@
       ></div>
     </main>
 
-    <!-- 密码验证弹窗 -->
-    <Teleport to="body">
-      <transition name="dialog-fade">
-        <div v-if="showPasswordDialog" class="dialog-overlay" @click.self="closePasswordDialog">
-          <div class="password-dialog glass-card">
-            <h3 class="dialog-title">管理员验证</h3>
-            <p class="dialog-subtitle">请输入管理员密码</p>
-            <input
-              type="password"
-              v-model="passwordInput"
-              class="password-input"
-              placeholder="请输入密码"
-              @keyup.enter="verifyPassword"
-              ref="passwordInputEl"
-            />
-            <div class="dialog-actions">
-              <button class="btn btn-ghost" @click="closePasswordDialog">取消</button>
-              <button class="btn btn-primary" @click="verifyPassword">确认</button>
-            </div>
-          </div>
-        </div>
-      </transition>
-    </Teleport>
+
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { usePagesStore } from '@/stores/pages';
+const pagesStore = usePagesStore();
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
-const typedText = '欢迎来到沛心的博客';
+const typedText = computed(() => pagesStore.text('home', 'title', '欢迎来到沛心的博客'));
 const displayText = ref('');
 let idx = 0;
 let typingTimer = null;
@@ -68,10 +48,7 @@ let isDeleting = false;
 // 三重点击计数器
 const clickCount = ref(0);
 let clickTimer = null;
-const showPasswordDialog = ref(false);
-const passwordInput = ref('');
-const passwordInputEl = ref(null);
-const CORRECT_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || '';
+
 
 function handleTripleClick() {
   clickCount.value++;
@@ -82,25 +59,7 @@ function handleTripleClick() {
 
   if (clickCount.value >= 3) {
     clickCount.value = 0;
-    showPasswordDialog.value = true;
-    nextTick(() => {
-      passwordInputEl.value?.focus();
-    });
-  }
-}
-
-function closePasswordDialog() {
-  showPasswordDialog.value = false;
-  passwordInput.value = '';
-}
-
-function verifyPassword() {
-  if (passwordInput.value === CORRECT_PASSWORD) {
-    closePasswordDialog();
     router.push('/admin');
-  } else {
-    passwordInput.value = '';
-    alert('密码错误');
   }
 }
 
@@ -120,8 +79,8 @@ const startTypingLoop = () => {
   typingTimer = setInterval(() => {
     if (!isDeleting) {
       idx++;
-      displayText.value = typedText.slice(0, idx);
-      if (idx >= typedText.length) {
+      displayText.value = typedText.value.slice(0, idx);
+      if (idx >= typedText.value.length) {
         clearInterval(typingTimer);
         loopTimer = setTimeout(() => {
           isDeleting = true;
@@ -135,7 +94,7 @@ const startTypingLoop = () => {
 const startDeleting = () => {
   typingTimer = setInterval(() => {
     idx--;
-    displayText.value = typedText.slice(0, idx);
+    displayText.value = typedText.value.slice(0, idx);
     if (idx <= 0) {
       clearInterval(typingTimer);
       loopTimer = setTimeout(() => {
@@ -144,6 +103,8 @@ const startDeleting = () => {
     }
   }, 80);
 };
+
+watch(typedText, () => startTypingLoop());
 
 onMounted(() => {
   startTypingLoop();
@@ -374,10 +335,17 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 @media (max-width: 640px) {
-  .hero-section { padding: 24px 16px; }
-  .hero-title { font-size: 1.8rem; }
-  .hero-sub { font-size: 0.95rem; }
-  .hero-cta { flex-direction: column; align-items: center; gap: 12px; }
-  .btn { width: 100%; max-width: 280px; }
+  .home { min-height: calc(100svh - 56px); }
+  .hero-section { min-height: calc(100svh - 56px); padding: 32px 16px; }
+  .hero-content {
+    max-width: 480px;
+    padding: 0;
+  }
+  .hero-title { display: block; font-size: 28px; line-height: 1.35; min-height: 76px; margin-bottom: 12px; overflow-wrap: anywhere; }
+  .hero-sub { font-size: 15px; line-height: 1.7; margin-bottom: 24px; }
+  .hero-cta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .btn { min-height: 46px; width: 100%; padding: 10px 8px; max-width: none; font-size: 14px; border-radius: 12px; }
+  .btn-primary { box-shadow: 0 4px 14px rgba(236, 72, 153, 0.2); }
+  .type-cursor { margin-left: 3px; width: 2px; }
 }
 </style>

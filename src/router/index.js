@@ -1,10 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import Home from '@/views/Home.vue'
 
 const routes = [
   {
     path: '/',
     name: 'Home',
-    component: () => import('@/views/Home.vue'),
+    component: Home,
     meta: { title: '首页' }
   },
   {
@@ -53,13 +54,6 @@ const router = createRouter({
     if (savedPosition) return savedPosition
     return { top: 0, behavior: 'smooth' }
   }
-})
-
-router.beforeEach((to, from, next) => {
-  const siteName = '沛心的个人博客'
-  const pageTitle = to.meta?.title || ''
-  document.title = pageTitle ? `${pageTitle} - ${siteName}` : siteName
-  next()
 })
 
 export default router
