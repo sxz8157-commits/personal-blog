@@ -69,6 +69,7 @@
       </template>
       <div v-else class="list-empty"><span class="empty-symbol" aria-hidden="true">⌕</span><h3>{{ articles.length ? '没有找到相关内容' : '新的文章，还在路上' }}</h3><p>{{ articles.length ? '试试更短的关键词，或切换文档格式。' : '等下一次灵感，慢慢写给你。' }}</p><button v-if="searchQuery || activeFormat" type="button" class="quiet-button" @click="resetSearch">查看全部文章</button></div>
       <p class="library-footer">每一次记录，都是一点新的发现。</p>
+      <DeskToy class="article-toy" kind="windmill" name="小风车" hint="点一下，借一阵风" />
     </section>
   </div>
 </template>
@@ -79,6 +80,7 @@ import { useRouter } from 'vue-router'
 import { usePagesStore } from '@/stores/pages'
 import request from '@/utils/request'
 import TagCloudCanvas from '@/components/TagCloudCanvas.vue'
+import DeskToy from '@/components/DeskToy.vue'
 import { filterArticles, prepareArticles } from '@/utils/articleIndex'
 
 const pagesStore = usePagesStore()
@@ -179,6 +181,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped lang="scss">
+.article-toy { margin: 24px 0 0 auto; }
 .articles-page {
   --article-ink: #242035;
   --article-muted: #5d566d;

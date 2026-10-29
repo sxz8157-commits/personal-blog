@@ -20,6 +20,8 @@
         </div>
       </section>
 
+      <DeskToy class="home-toy" kind="cat" name="弹簧小猫" hint="点一下打招呼，拖动后回弹" />
+
       <!-- 隐藏的三重点击触发区域 -->
       <div
         class="admin-trigger-zone"
@@ -36,6 +38,7 @@ import { usePagesStore } from '@/stores/pages';
 const pagesStore = usePagesStore();
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
+import DeskToy from '@/components/DeskToy.vue';
 
 const router = useRouter();
 const typedText = computed(() => pagesStore.text('home', 'title', '欢迎来到沛心的博客'));
@@ -139,6 +142,12 @@ $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
   text-align: center;
   max-width: 900px;
   width: 100%;
+}
+
+.home-toy { position: absolute; bottom: 28px; right: clamp(28px, 8vw, 140px); }
+@media(max-width:640px), (max-height:700px) {
+  .hero-section { flex-direction: column; }
+  .home-toy { position: relative; right: auto; bottom: auto; align-self: flex-end; margin-top: 28px; margin-right: 12px; }
 }
 
 .hero-title {

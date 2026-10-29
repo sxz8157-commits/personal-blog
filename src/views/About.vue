@@ -28,6 +28,8 @@
             </div>
           </div>
 
+          <DeskToy class="about-toy about-toy--right" kind="star" name="微光星星" hint="点亮或熄灭一颗星星" />
+
           <!-- 技能树 -->
           <div class="skills-section fade-up" style="animation-delay: 0.3s">
             <h3 class="section-title text-readable">{{ pagesStore.text('about', 'skills_title', '技能树') }}</h3>
@@ -59,6 +61,7 @@
               </a>
             </div>
           </div>
+          <DeskToy class="about-toy" kind="coin" name="翻面硬币" hint="点一下，在阳光与月色之间翻面" />
         </div>
       </section>
     </div>
@@ -71,6 +74,7 @@ const pagesStore = usePagesStore();
 import { ref, onMounted } from 'vue';
 import { safeUrl } from '@/utils/safeHtml';
 import { useAboutStore } from '@/stores/about';
+import DeskToy from '@/components/DeskToy.vue';
 
 const aboutStore = useAboutStore();
 
@@ -160,6 +164,8 @@ onMounted(() => {
 </script>
 
 <style scoped lang="scss">
+.about-toy { margin: 32px 0 48px; }
+.about-toy--right { margin-left: auto; }
 $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 
 .about-page {

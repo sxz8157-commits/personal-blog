@@ -23,6 +23,8 @@
           </div>
         </div>
 
+        <DeskToy class="more-toy more-toy--right" kind="bubble" name="玻璃气泡" hint="点破一颗泡泡，放松一下" />
+
         <p v-if="cardsLoading" class="content-load-status" role="status">正在加载项目与技术栈…</p>
         <div v-else-if="cardsError" class="content-load-status" role="status">
           {{ cardsError }} <button @click="loadCards" type="button">重新加载</button>
@@ -60,6 +62,8 @@
           </div>
         </div>
 
+        <DeskToy class="more-toy" kind="dice" name="幸运骰子" hint="点一下，看看这次是几点" />
+
         <!-- 技能书展示区 -->
         <div class="tech-stack-section fade-up" style="animation-delay: 0.3s" v-if="!cardsLoading && skillCards.length > 0">
           <h3 class="section-title text-readable">技术栈</h3>
@@ -90,6 +94,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import request from '@/utils/request';
 import PlayfulCorner from '@/components/PlayfulCorner.vue';
+import DeskToy from '@/components/DeskToy.vue';
 defineEmits(['playful-visibility']);
 
 const playfulTopics = computed(() => [
@@ -175,6 +180,8 @@ onUnmounted(() => { if (clickTimer) clearTimeout(clickTimer); });
 </script>
 
 <style scoped lang="scss">
+.more-toy { margin: 32px 0 48px; }
+.more-toy--right { margin-left: auto; }
 $ease-damped: cubic-bezier(0.25, 0.8, 0.25, 1);
 
 .more-page {
