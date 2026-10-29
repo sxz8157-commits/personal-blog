@@ -130,6 +130,8 @@
     </transition>
   </Teleport>
 
+  <InteractiveDock v-if="interactionReady && route.name !== 'Admin'" :playing="isPlaying" :audio-busy="playlistLoading || audioLoading" :background-busy="backgroundBusy" :play-area-visible="playAreaVisible" :track="currentSong.name" :hidden="playerOpen || mobileMenuOpen" :feedback="backgroundFeedback || playlistError || playbackError || (playlistLoaded && !playlist.length ? '暂时没有可播放的歌曲' : '')" @toggle-play="toggleDockPlay" @next-background="$emit('next-background')" />
+
   <!-- 音频元素 -->
   <audio ref="audioEl" preload="metadata"></audio>
   </div>
@@ -141,6 +143,10 @@ const pagesStore = usePagesStore();
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import request from '@/utils/request';
+import InteractiveDock from '@/components/InteractiveDock.vue';
+
+const props = defineProps({ interactionReady: Boolean, backgroundBusy: Boolean, playAreaVisible: Boolean, backgroundFeedback: { type: String, default: '' } });
+defineEmits(['next-background']);
 
 const route = useRoute();
 const mobileMenuOpen = ref(false);
@@ -352,6 +358,15 @@ function togglePlay() {
     if (audioEl.value.error) audioEl.value.load();
     requestPlayback();
   }
+}
+
+// 小唱片只控制现有音频，不再创建播放器；列表未就绪时先读取一次。
+function toggleDockPlay() {
+  if (playlistLoading.value || audioLoading.value) return;
+  if (playlistLoaded.value) { togglePlay(); return; }
+  fetchAudioPlaylist().then(() => {
+    if (!disposed && playlist.value.length) togglePlay();
+  });
 }
 
 // 上一首（如果刚进网站没有上一首，就随机播放）

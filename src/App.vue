@@ -14,11 +14,11 @@
 
     <!-- 主内容区域 -->
     <div v-show="!startupLoading" class="app-content">
-      <Navbar />
+      <Navbar :interaction-ready="!startupLoading" :background-busy="backgroundSwitchBusy" :background-feedback="backgroundFeedback" :play-area-visible="playfulVisibility" @next-background="requestNextBackground" />
       <main class="page-container">
         <router-view v-slot="{ Component }">
           <transition name="page-slide" mode="out-in">
-            <component :is="Component" :key="$route.path" />
+            <component :is="Component" :key="$route.path" @playful-visibility="playfulVisibility = $event" />
           </transition>
         </router-view>
       </main>
@@ -80,6 +80,12 @@ let currentBackgroundUrl = ''
 let firstRotation = true
 const previousBackground = lastBackground()
 const failedMedia = new Set()
+const backgroundSwitchBusy = ref(false)
+const backgroundFeedback = ref('')
+const playfulVisibility = ref(false)
+watch(() => route.path, () => { playfulVisibility.value = false })
+let rotationFlight = null
+let feedbackTimer = null
 
 function buildPublicAssetPath(relativePath) {
   const normalized = String(relativePath || '').replace(/^\/+/, '')
@@ -139,40 +145,65 @@ function scheduleRotation(delay = ROTATION_INTERVAL) {
   rotationTimer = setTimeout(() => { rotationTimer = null; rotateBackground() }, delay)
 }
 
-async function rotateBackground() {
-  if (disposed || startupLoading.value || document.hidden) return
+// 手动按钮和自动轮播共用唯一切换任务，避免取消彼此的加载或重复下载。
+function rotateBackground(manual = false) {
+  if (disposed || startupLoading.value || document.hidden) return Promise.resolve(false)
+  if (rotationFlight) return rotationFlight
+  clearTimeout(rotationTimer)
+  rotationTimer = null
+  backgroundSwitchBusy.value = true
   const epoch = rotationEpoch
+  rotationFlight = performBackgroundRotation(manual, epoch).finally(() => {
+    backgroundSwitchBusy.value = false
+    rotationFlight = null
+  })
+  return rotationFlight
+}
+
+async function performBackgroundRotation(manual, epoch) {
   try {
     if (!indexReady || !mediaPool.length || failedMedia.size >= mediaPool.length) {
       rotationRequest = new AbortController()
       await loadBackgroundIndex(rotationRequest.signal)
       rotationRequest = null
     }
-    if (disposed || document.hidden || epoch !== rotationEpoch) return
-    // 所有候选都试过仍失败时停止本轮，下一周期重新读取列表。
-    for (let attempt = 0; attempt < mediaPool.length; attempt++) {
+    if (disposed || document.hidden || epoch !== rotationEpoch) return false
+    const attempts = manual ? Math.min(2, mediaPool.length) : mediaPool.length
+    for (let attempt = 0; attempt < attempts; attempt++) {
       const excluded = [...failedMedia, currentBackgroundUrl]
       let next = rotation?.next(firstRotation ? [...excluded, previousBackground] : excluded)
       if (!next && firstRotation) next = rotation?.next(excluded)
       if (!next) { indexReady = false; break }
-      const ready = await backgroundPlayer.value?.show(displayMedia(next), { timeout: 12_000 })
-      if (disposed || document.hidden || epoch !== rotationEpoch) return
+      const ready = await backgroundPlayer.value?.show(displayMedia(next), { timeout: manual ? 6_000 : 12_000 })
+      if (disposed || document.hidden || epoch !== rotationEpoch) return false
       if (ready) {
         currentBackgroundUrl = next.url
         rememberBackground(next.url)
         firstRotation = false
         scheduleRotation()
-        return
+        return true
       }
       failedMedia.add(next.url)
     }
     scheduleRotation()
+    return false
   } catch (error) {
     if (!disposed && epoch === rotationEpoch) {
       console.warn('壁纸切换失败，保留当前背景:', error)
       scheduleRotation()
     }
+    return false
   }
+}
+
+async function requestNextBackground() {
+  if (backgroundSwitchBusy.value || disposed || document.hidden) return
+  clearTimeout(feedbackTimer)
+  backgroundFeedback.value = '正在准备下一张壁纸…'
+  const changed = await rotateBackground(true)
+  if (disposed) return
+  backgroundFeedback.value = changed ? '壁纸已切换' : document.hidden ? '切换已暂停，当前壁纸保留' : mediaPool.length < 2 && indexReady ? '当前没有其他可切换的壁纸' : '暂时无法切换，已保留当前壁纸'
+  feedbackTimer = setTimeout(() => { backgroundFeedback.value = '' }, 4500)
 }
 
 function handleBackgroundVisibility() {
@@ -232,6 +263,7 @@ onUnmounted(() => {
   backgroundPlayer.value?.cancelPending()
   clearTimeout(startupTimer)
   clearTimeout(completionTimer)
+  clearTimeout(feedbackTimer)
   clearTimeout(rotationTimer)
   document.removeEventListener('visibilitychange', handleBackgroundVisibility)
   document.body.classList.remove('site-starting')

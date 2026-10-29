@@ -74,6 +74,7 @@
             </div>
           </div>
         </div>
+        <PlayfulCorner :topics="playfulTopics" @visibility-change="$emit('playful-visibility', $event)" />
       </section>
     </div>
 
@@ -88,6 +89,14 @@ const pagesStore = usePagesStore();
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import request from '@/utils/request';
+import PlayfulCorner from '@/components/PlayfulCorner.vue';
+defineEmits(['playful-visibility']);
+
+const playfulTopics = computed(() => [
+  { id: 'articles', label: pagesStore.text('site', 'nav_articles', '文章'), note: pagesStore.text('articles', 'subtitle', '点开一篇文章，慢慢读。') },
+  { id: 'about', label: pagesStore.text('site', 'nav_about', '关于'), note: pagesStore.text('about', 'subtitle', '在代码与像素之间，记录一点灵感。') },
+  { id: 'music', label: '音乐', note: '点一下小唱片，让喜欢的音乐陪一会儿。' }
+]);
 
 const router = useRouter();
 const clickCount = ref(0);
