@@ -64,3 +64,26 @@ Vite build、3 项几何单元测试、17 项浏览器场景、原文章页四�
 - 当前前端 /opt/peixin-blog/releases/20261029-interactive14，26 文件、3,248,903 字节，上一版本 interactive13 可回退。数据库所有字段、58 媒体、配置及后端哈希均保持一致，integrity ok，应用/Nginx active。
 - 构建与17项本地针对性检查通过，覆盖1440/768/390/320；线上1440/390四页面共8组真实HTTPS点击、鼠标/CDP触摸拖动和状态反馈通过，另检查手机横屏、文章搜索和原纸飞机，无页面脚本异常或内容写请求。实体手机/微信未实测。
 - 证据：C:/Users/PX/Documents/Codex/博客/2026-10-29/six-more-toys/ 的 qa/results.json、live-qa/results.json、截图、release.json、server-after.json。主JS gzip 78.81KB，比interactive13增加约2.07KB；最长针对性命令为17组本地浏览器检查（约1分钟，分段续跑），构建2.015秒。
+
+## 最新玩法升级（2026-10-29，interactive15）
+
+用户认为“只是拖一拖太无聊”，本轮保留四页面的分散位置，将六个元素升级为不同操作、可累积的反馈和重玩流程。操作提示直接可见。
+
+| 元素 | 当前玩法 |
+| --- | --- |
+| 小猫 | 点按抚摸、长按摸头、喂一口；亲密度0–5，心形反馈，眼神跟随附近鼠标 |
+| 风车 | 点按吹风、长按蓄风松手旋转、左右划动改变方向；力度影响圈数，转动逐渐减速 |
+| 气泡 | 九颗独立泡泡，点按或按住划过可逐个戳破；完成9/9有反馈，“再来一板”重玩 |
+| 骰子 | 先选猜单/猜双，再掷骰；滚动后公布1–6随机结果、判断输赢并累计得分；滚动中锁定选择 |
+| 硬币 | 点按随机抛币，有腾空/翻转过程及落面结果，保留最近五次；允许连续同面 |
+| 星星 | 点按收集五颗星光组成小星座，或长按蓄力释放流星；可以重新许愿 |
+
+借鉴来源与取舍（Star为2026-10-29网页快照）：
+
+- [Live2D Widget](https://github.com/stevenjoezhang/live2d-widget)，约11k Star；阅读了 [widget.ts](https://github.com/stevenjoezhang/live2d-widget/blob/master/src/widget.ts) 的悬浮、点击、触碰与文字反馈事件，采用“操作→状态→反馈”的组织方式。
+- [canvas-confetti](https://github.com/catdad/canvas-confetti)，约12.8k Star；阅读 [confetti.js](https://github.com/catdad/canvas-confetti/blob/master/src/confetti.js) 与减少动态效果选项，采用局部、有限粒子的奖励反馈。
+- [Matter.js](https://github.com/liabru/matter-js)，约18.6k Star；阅读 [slingshot.js](https://github.com/liabru/matter-js/blob/master/examples/slingshot.js) 的弹性约束和释放逻辑，启发长按蓄力、释放后反馈的适配方案。
+
+本轮复用原SVG、Vue和拖动边界，以局部CSS效果实现上述玩法，没有引入这些项目的运行时、模型或代码。最多12个反馈粒子，约1.3秒清理；骰子仅滚动时短暂更新。长按与普通点击互斥，支持Pointer Cancel、键盘和减少动态效果；切页、失焦和隐藏页面清理临时状态。没有音效自动播放或新的网络接口。
+
+构建和18项本地检查通过：1440/768/390/320四页面，真实鼠标和CDP触屏长按/划动、九格连划、计分与锁定、连续同面和五次记录上限、重玩、减少动态效果与切页清理。监听计数排除了经CDP与函数源码确认为Playwright注入的_hitTargetInterceptor，组件本身无残留手势监听。真实线上验收另见版本记录，实体手机/微信未实测。
