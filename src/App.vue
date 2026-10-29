@@ -146,21 +146,21 @@ function scheduleRotation(delay = ROTATION_INTERVAL) {
 }
 
 // 手动按钮和自动轮播共用唯一切换任务，避免取消彼此的加载或重复下载。
-function rotateBackground(manual = false) {
+function rotateBackground() {
   if (disposed || startupLoading.value || document.hidden) return Promise.resolve(false)
   if (rotationFlight) return rotationFlight
   clearTimeout(rotationTimer)
   rotationTimer = null
   backgroundSwitchBusy.value = true
   const epoch = rotationEpoch
-  rotationFlight = performBackgroundRotation(manual, epoch).finally(() => {
+  rotationFlight = performBackgroundRotation(epoch).finally(() => {
     backgroundSwitchBusy.value = false
     rotationFlight = null
   })
   return rotationFlight
 }
 
-async function performBackgroundRotation(manual, epoch) {
+async function performBackgroundRotation(epoch) {
   try {
     if (!indexReady || !mediaPool.length || failedMedia.size >= mediaPool.length) {
       rotationRequest = new AbortController()
@@ -168,13 +168,13 @@ async function performBackgroundRotation(manual, epoch) {
       rotationRequest = null
     }
     if (disposed || document.hidden || epoch !== rotationEpoch) return false
-    const attempts = manual ? Math.min(2, mediaPool.length) : mediaPool.length
+    const attempts = mediaPool.length
     for (let attempt = 0; attempt < attempts; attempt++) {
       const excluded = [...failedMedia, currentBackgroundUrl]
       let next = rotation?.next(firstRotation ? [...excluded, previousBackground] : excluded)
       if (!next && firstRotation) next = rotation?.next(excluded)
       if (!next) { indexReady = false; break }
-      const ready = await backgroundPlayer.value?.show(displayMedia(next), { timeout: manual ? 6_000 : 12_000 })
+      const ready = await backgroundPlayer.value?.show(displayMedia(next), { timeout: 12_000 })
       if (disposed || document.hidden || epoch !== rotationEpoch) return false
       if (ready) {
         currentBackgroundUrl = next.url
@@ -200,7 +200,7 @@ async function requestNextBackground() {
   if (backgroundSwitchBusy.value || disposed || document.hidden) return
   clearTimeout(feedbackTimer)
   backgroundFeedback.value = '正在准备下一张壁纸…'
-  const changed = await rotateBackground(true)
+  const changed = await rotateBackground()
   if (disposed) return
   backgroundFeedback.value = changed ? '壁纸已切换' : document.hidden ? '切换已暂停，当前壁纸保留' : mediaPool.length < 2 && indexReady ? '当前没有其他可切换的壁纸' : '暂时无法切换，已保留当前壁纸'
   feedbackTimer = setTimeout(() => { backgroundFeedback.value = '' }, 4500)
